@@ -61,12 +61,34 @@ function findOrCreateCustomer(name, phone){
   if(!existing && name) existing = customers.find(c=>c.name.trim().toLowerCase()===name.toLowerCase() && (!phone || !c.phone));
   if(existing){
     if(phone && !existing.phone){ existing.phone = phone; DB.saveCustomers(customers); }
+    if(!existing.contacts) existing.contacts = [];
     return existing;
   }
-  const created = { id: uid('cust'), name, phone, points:0, purchaseCount:0, purchaseTotal:0, createdAt:new Date().toISOString() };
+  const created = { id: uid('cust'), name, phone, points:0, purchaseCount:0, purchaseTotal:0, contacts:[], createdAt:new Date().toISOString() };
   customers.push(created);
   DB.saveCustomers(customers);
   return created;
+}
+/* Remember the specific person (name + phone) who received an invoice under a
+   company, so the cashier can quickly re-pick them next time. Dedupes by
+   phone when given, otherwise by name. */
+function addContactToCustomer(customerId, contactName, contactPhone){
+  contactName = (contactName||'').trim();
+  contactPhone = (contactPhone||'').trim();
+  if(!customerId || !contactName) return;
+  const customers = DB.getCustomers();
+  const customer = customers.find(c=>c.id===customerId);
+  if(!customer) return;
+  if(!customer.contacts) customer.contacts = [];
+  let existing = null;
+  if(contactPhone) existing = customer.contacts.find(p=>p.phone && p.phone===contactPhone);
+  if(!existing) existing = customer.contacts.find(p=>p.name.trim().toLowerCase()===contactName.toLowerCase());
+  if(existing){
+    if(contactPhone && !existing.phone) existing.phone = contactPhone;
+  } else {
+    customer.contacts.push({ name: contactName, phone: contactPhone });
+  }
+  DB.saveCustomers(customers);
 }
 function awardPoints(customerId, saleTotal){
   if(!customerId) return 0;
@@ -84,6 +106,25 @@ function customerCreditRemaining(customerId){
   return creditOrders()
     .filter(o=>o.customerId===customerId && !creditIsSettled(o))
     .reduce((s,o)=>s+creditRemaining(o), 0);
+}
+
+/* One-time repair: earlier versions saved the order to storage BEFORE
+   stamping pointsEarned on it, so historical invoices show "—" for points
+   even though the company's total points are correct. Backfill a
+   best-effort estimate (using today's points rate) for any order that's
+   missing the field, so the per-invoice column isn't stuck empty forever. */
+function repairMissingOrderPoints(){
+  const rate = pointsRate();
+  if(rate <= 0) return;
+  const orders = DB.getOrders();
+  let changed = false;
+  orders.forEach(o=>{
+    if(o.customerId && !Object.prototype.hasOwnProperty.call(o, 'pointsEarned')){
+      o.pointsEarned = pointsForAmount(o.total);
+      changed = true;
+    }
+  });
+  if(changed) DB.saveOrders(orders);
 }
 
 /* ---------- Seed demo data on first run ---------- */
@@ -116,6 +157,7 @@ function seedIfEmpty(){
   DB.saveProducts(demo);
 }
 seedIfEmpty();
+repairMissingOrderPoints();
 
 /* ---------- Seed default users on first run ---------- */
 function seedUsersIfEmpty(){
@@ -158,7 +200,8 @@ let state = {
   editVariantRows: [], // used while product modal open
   editGroup: null,      // used while product modal open
   editUserRole: null,    // used while user modal open
-  selectedCustomer: null,   // customer attached to the current cart, if any
+  selectedCustomer: null,   // company attached to the current cart, if any
+  selectedContact: null,    // {name, phone} — the specific person receiving this invoice, under selectedCustomer
   customerSearchTerm: '',
   customerPickerSearchTerm: ''
 };
@@ -886,15 +929,22 @@ function renderCart(){
   renderTicketCustomerRow(total);
 
   document.getElementById('checkoutBtn').disabled = state.cart.length===0;
+
+  const pickBtn = document.getElementById('pickCustomerBtn');
+  if(pickBtn && state.cart.length===0){
+    // no items yet — don't nag about the customer before there's anything to sell
+    pickBtn.classList.remove('ticket-customer-pick-required');
+  }
 }
 document.getElementById('discountInput').addEventListener('input', renderCart);
 
-/* ---- Customer selection on the cart (optional) ---- */
+/* ---- Customer selection on the cart (إجباري — لازم متعامل + اسم الشخص المستلم قبل إتمام أي بيع) ---- */
 function renderTicketCustomerRow(total){
   const row = document.getElementById('ticketCustomerRow');
   const c = state.selectedCustomer;
-  if(!c){
-    row.innerHTML = `<button class="ticket-customer-pick" id="pickCustomerBtn">👤 اختيار عميل (اختياري)</button>`;
+  const contact = state.selectedContact;
+  if(!c || !contact){
+    row.innerHTML = `<button class="ticket-customer-pick ticket-customer-pick-required" id="pickCustomerBtn">🏢 اختيار المتعامل واسم العميل (إجباري)</button>`;
     document.getElementById('pickCustomerBtn').onclick = openCustomerPickerModal;
     return;
   }
@@ -904,7 +954,7 @@ function renderTicketCustomerRow(total){
     : `🎁 ${c.points||0} نقطة`;
   row.innerHTML = `
     <div class="ticket-customer-info">
-      <span class="ticket-customer-name">👤 ${escapeHtml(c.name)}</span>
+      <span class="ticket-customer-name">🏢 ${escapeHtml(c.name)} — 👤 ${escapeHtml(contact.name)}${contact.phone ? ' ('+escapeHtml(contact.phone)+')' : ''}</span>
       <span class="ticket-customer-points">${pointsLine}</span>
     </div>
     <div class="ticket-customer-actions">
@@ -912,7 +962,7 @@ function renderTicketCustomerRow(total){
       <button id="removeCustomerBtn">✕ إلغاء</button>
     </div>`;
   document.getElementById('changeCustomerBtn').onclick = openCustomerPickerModal;
-  document.getElementById('removeCustomerBtn').onclick = ()=>{ state.selectedCustomer = null; renderCart(); };
+  document.getElementById('removeCustomerBtn').onclick = ()=>{ state.selectedCustomer = null; state.selectedContact = null; renderCart(); };
 }
 
 function openCustomerPickerModal(){
@@ -920,14 +970,30 @@ function openCustomerPickerModal(){
   state.customerPickerSearchTerm = '';
   document.getElementById('quickAddCustomerName').value = '';
   document.getElementById('quickAddCustomerPhone').value = '';
+  showCustomerPickerStep('company');
   renderCustomerPickerList();
   openModal('customerPickerModal');
   const hasAnyCustomers = DB.getCustomers().length > 0;
-  // First time (no customers at all yet): jump straight to "add a customer"
+  // First time (no companies at all yet): jump straight to "add a company"
   // instead of a search box with nothing to search.
   setTimeout(()=>{
     document.getElementById(hasAnyCustomers ? 'customerPickerSearch' : 'quickAddCustomerName').focus();
   }, 50);
+}
+
+function showCustomerPickerStep(step){
+  const title = document.getElementById('customerPickerTitle');
+  const stepCompany = document.getElementById('customerPickerStepCompany');
+  const stepContact = document.getElementById('customerPickerStepContact');
+  if(step==='contact'){
+    title.textContent = '👤 بيانات العميل المستلم';
+    stepCompany.classList.add('hidden');
+    stepContact.classList.remove('hidden');
+  } else {
+    title.textContent = '🏢 اختيار المتعامل';
+    stepContact.classList.add('hidden');
+    stepCompany.classList.remove('hidden');
+  }
 }
 
 function renderCustomerPickerList(){
@@ -942,15 +1008,15 @@ function renderCustomerPickerList(){
   const quickAddHead = document.querySelector('#customerPickerModal .quick-add-head');
 
   if(!allCustomers.length){
-    // No customers in the whole system yet — make it obvious this is step 1.
-    list.innerHTML = '<div class="empty-note">لسه مفيش عملاء متسجلين خالص. ضيف أول عميل من هنا 👇</div>';
-    if(quickAddHead) quickAddHead.textContent = 'ضيف أول عميل عندك:';
+    // No companies in the whole system yet — make it obvious this is step 1.
+    list.innerHTML = '<div class="empty-note">لسه مفيش متعاملين متسجلين خالص. ضيف أول متعامل من هنا 👇</div>';
+    if(quickAddHead) quickAddHead.textContent = 'ضيف أول متعامل عندك:';
     return;
   }
-  if(quickAddHead) quickAddHead.textContent = 'مش لاقي العميل؟ ضيفه بسرعة';
+  if(quickAddHead) quickAddHead.textContent = 'مش لاقي المتعامل؟ ضيفه بسرعة';
 
   if(!customers.length){
-    list.innerHTML = '<div class="empty-note">مفيش عميل بالاسم أو الرقم ده. ضيفه تحت 👇</div>';
+    list.innerHTML = '<div class="empty-note">مفيش متعامل بالاسم أو الرقم ده. ضيفه تحت 👇</div>';
     return;
   }
   list.innerHTML = '';
@@ -960,11 +1026,7 @@ function renderCustomerPickerList(){
     opt.innerHTML = `
       <span class="picker-option-label">${escapeHtml(c.name)}${c.phone ? ' — '+escapeHtml(c.phone) : ''}</span>
       <span class="picker-option-stock">🎁 ${c.points||0} نقطة</span>`;
-    opt.onclick = ()=>{
-      state.selectedCustomer = c;
-      closeModal('customerPickerModal');
-      renderCart();
-    };
+    opt.onclick = ()=> goToContactStep(c);
     list.appendChild(opt);
   });
 }
@@ -975,17 +1037,68 @@ document.getElementById('customerPickerSearch').addEventListener('input', e=>{
 document.getElementById('quickAddCustomerBtn').addEventListener('click', ()=>{
   const name = document.getElementById('quickAddCustomerName').value.trim();
   const phone = document.getElementById('quickAddCustomerPhone').value.trim();
-  if(!name){ showToast('اكتب اسم العميل الأول'); return; }
+  if(!name){ showToast('اكتب اسم المتعامل الأول'); return; }
   const customer = findOrCreateCustomer(name, phone);
+  goToContactStep(customer);
+});
+
+/* ---- Step 2: the specific person (اسم العميل + التليفون) receiving this invoice ---- */
+function goToContactStep(customer){
   state.selectedCustomer = customer;
+  state.selectedContact = null;
+  document.getElementById('customerPickerCompanyBadge').innerHTML =
+    `المتعامل المختار: <strong>🏢 ${escapeHtml(customer.name)}</strong>`;
+  document.getElementById('contactNameInput').value = '';
+  document.getElementById('contactPhoneInput').value = '';
+
+  const chipsWrap = document.getElementById('customerPickerContactChips');
+  const contacts = customer.contacts || [];
+  if(!contacts.length){
+    chipsWrap.innerHTML = '';
+  } else {
+    chipsWrap.innerHTML = '<div class="empty-note" style="padding:0 0 6px;">أشخاص سبق تسجيلهم لنفس المتعامل:</div>';
+    [...contacts].reverse().forEach(p=>{
+      const opt = document.createElement('div');
+      opt.className = 'picker-option';
+      opt.innerHTML = `<span class="picker-option-label">👤 ${escapeHtml(p.name)}${p.phone ? ' — '+escapeHtml(p.phone) : ''}</span>`;
+      opt.onclick = ()=> confirmContact(p.name, p.phone);
+      chipsWrap.appendChild(opt);
+    });
+  }
+
+  showCustomerPickerStep('contact');
+  setTimeout(()=>document.getElementById('contactNameInput').focus(), 50);
+}
+
+function confirmContact(name, phone){
+  name = (name||'').trim();
+  phone = (phone||'').trim();
+  if(!name){ showToast('اكتب اسم العميل المستلم'); return; }
+  state.selectedContact = { name, phone };
+  addContactToCustomer(state.selectedCustomer.id, name, phone);
   closeModal('customerPickerModal');
   renderCart();
-  showToast('اتضاف العميل واتحدد للفاتورة');
+  showToast('اتحدد العميل للفاتورة');
+}
+
+document.getElementById('customerPickerBackBtn').addEventListener('click', ()=>{
+  showCustomerPickerStep('company');
+});
+document.getElementById('confirmContactBtn').addEventListener('click', ()=>{
+  confirmContact(
+    document.getElementById('contactNameInput').value,
+    document.getElementById('contactPhoneInput').value
+  );
 });
 
 /* ---- Checkout ---- */
 document.getElementById('checkoutBtn').addEventListener('click', ()=>{
   if(!state.cart.length) return;
+  if(!state.selectedCustomer || !state.selectedContact){
+    showToast('لازم تختار المتعامل واسم العميل الأول قبل إتمام البيع');
+    openCustomerPickerModal();
+    return;
+  }
   openModal('paymentModal');
 });
 
@@ -1026,7 +1139,7 @@ document.getElementById('creditDownPayment').addEventListener('input', updateCre
 document.getElementById('confirmCreditSaleBtn').addEventListener('click', ()=>{
   const customerName = document.getElementById('creditCustomerName').value.trim();
   const customerPhone = document.getElementById('creditCustomerPhone').value.trim();
-  if(!customerName){ showToast('اكتب اسم العميل الأول'); return; }
+  if(!customerName){ showToast('اكتب اسم المتعامل الأول'); return; }
   const subtotal = cartSubtotal();
   const discount = Math.max(0, Number(document.getElementById('discountInput').value) || 0);
   const total = Math.max(0, subtotal - discount);
@@ -1088,16 +1201,24 @@ function completeSale(method, creditInfo){
     order.customerPhone = state.selectedCustomer.phone || '';
   }
 
+  // The specific person (name + phone) who actually received this invoice,
+  // under the company above — captured mandatorily before checkout.
+  if(state.selectedContact){
+    order.contactName = state.selectedContact.name;
+    order.contactPhone = state.selectedContact.phone || '';
+    if(order.customerId) addContactToCustomer(order.customerId, order.contactName, order.contactPhone);
+  }
+
   const orders = DB.getOrders();
+  order.pointsEarned = order.customerId ? awardPoints(order.customerId, total) : 0;
   orders.push(order);
   DB.saveOrders(orders);
-
-  order.pointsEarned = order.customerId ? awardPoints(order.customerId, total) : 0;
 
   showReceipt(order);
 
   state.cart = [];
   state.selectedCustomer = null;
+  state.selectedContact = null;
   document.getElementById('discountInput').value = 0;
   renderCart();
   renderSales();
@@ -1138,12 +1259,15 @@ function showReceipt(order){
     const paid = creditPaidTotal(order);
     const remaining = creditRemaining(order);
     html += `
-    <div class="receipt-line"><span>العميل</span><span>${escapeHtml(order.customerName||'—')}</span></div>
-    ${order.customerPhone ? `<div class="receipt-line"><span>تليفون العميل</span><span>${escapeHtml(order.customerPhone)}</span></div>` : ''}
+    <div class="receipt-line"><span>المتعامل</span><span>${escapeHtml(order.customerName||'—')}</span></div>
+    ${order.customerPhone ? `<div class="receipt-line"><span>تليفون المتعامل</span><span>${escapeHtml(order.customerPhone)}</span></div>` : ''}
+    ${order.contactName ? `<div class="receipt-line"><span>الاسم</span><span>${escapeHtml(order.contactName)}</span></div>` : ''}
+    ${order.contactPhone ? `<div class="receipt-line"><span>تليفون العميل</span><span>${escapeHtml(order.contactPhone)}</span></div>` : ''}
     <div class="receipt-line"><span>المدفوع الآن</span><span>${money(paid)}</span></div>
     <div class="receipt-line"><strong>المتبقي على العميل</strong><strong>${money(remaining)}</strong></div>`;
   } else if(order.customerName){
-    html += `<div class="receipt-line"><span>العميل</span><span>${escapeHtml(order.customerName)}</span></div>`;
+    html += `<div class="receipt-line"><span>المتعامل</span><span>${escapeHtml(order.customerName)}</span></div>`;
+    if(order.contactName) html += `<div class="receipt-line"><span>الاسم</span><span>${escapeHtml(order.contactName)}</span></div>`;
   }
   if(order.customerId && order.pointsEarned>0){
     const c = DB.getCustomers().find(x=>x.id===order.customerId);
@@ -1156,7 +1280,7 @@ function showReceipt(order){
 document.getElementById('printReceiptBtn').addEventListener('click', ()=>window.print());
 
 /* =========================================================
-   CUSTOMERS VIEW (العملاء ونقاط الولاء)
+   CUSTOMERS VIEW (المتعاملين ونقاط الولاء)
    ========================================================= */
 function renderCustomersView(){
   const term = state.customerSearchTerm.trim().toLowerCase();
@@ -1167,7 +1291,7 @@ function renderCustomersView(){
   }
   const tbody = document.getElementById('customersTableBody');
   if(!customers.length){
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-note">مفيش عملاء مسجلين لسه</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-note">مفيش متعاملين مسجلين لسه</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -1175,17 +1299,92 @@ function renderCustomersView(){
     const debt = customerCreditRemaining(c.id);
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><strong>${escapeHtml(c.name)}</strong></td>
+      <td><button class="customer-name-link" title="عرض بيانات المتعامل ونقاطه">${escapeHtml(c.name)}</button></td>
       <td class="mono">${escapeHtml(c.phone||'—')}</td>
       <td class="mono">${c.purchaseCount||0}</td>
       <td class="mono">${money(c.purchaseTotal||0)}</td>
       <td class="mono">🎁 ${c.points||0}</td>
       <td class="mono">${debt>0.01 ? money(debt) : '—'}</td>
       <td><button class="icon-btn" title="تعديل">✏️</button> <button class="icon-btn" title="حذف">🗑️</button></td>`;
+    tr.querySelector('.customer-name-link').onclick = ()=>openCustomerDetailModal(c.id);
     tr.querySelectorAll('.icon-btn')[0].onclick = ()=>openCustomerModal(c);
     tr.querySelectorAll('.icon-btn')[1].onclick = ()=>deleteCustomer(c.id);
     tbody.appendChild(tr);
   });
+}
+
+/* ---- Company detail page: النقاط + الأشخاص المسجلين تحتها + سجل فواتيرها (رقم الفاتورة/الاسم/النقاط) ---- */
+function openCustomerDetailModal(customerId){
+  const c = DB.getCustomers().find(x=>x.id===customerId);
+  if(!c) return;
+
+  document.getElementById('customerDetailName').textContent = `🏢 ${c.name}`;
+  document.getElementById('customerDetailContact').innerHTML = `
+    <span>📱 تليفون المتعامل: <strong>${escapeHtml(c.phone||'مفيش رقم مسجل')}</strong></span>
+    <span>🗓️ متعامل معانا منذ: <strong>${new Date(c.createdAt).toLocaleDateString('ar-EG')}</strong></span>`;
+
+  const debt = customerCreditRemaining(c.id);
+  document.getElementById('customerDetailStats').innerHTML = `
+    <div class="stat-card accent">
+      <div class="stat-label">🎁 النقاط الحالية</div>
+      <div class="stat-value mono">${c.points||0}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">عدد المشتريات</div>
+      <div class="stat-value mono">${c.purchaseCount||0}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">إجمالي المشتريات</div>
+      <div class="stat-value mono">${money(c.purchaseTotal||0)}</div>
+    </div>
+    <div class="stat-card ${debt>0.01?'warn':''}">
+      <div class="stat-label">متبقي آجل</div>
+      <div class="stat-value mono">${debt>0.01 ? money(debt) : '—'}</div>
+    </div>`;
+
+  const contacts = c.contacts || [];
+  const contactsWrap = document.getElementById('customerDetailContactsList');
+  if(!contacts.length){
+    contactsWrap.innerHTML = '<div class="empty-note">لسه مفيش أشخاص متسجلين تحت المتعامل ده</div>';
+  } else {
+    contactsWrap.innerHTML = '';
+    [...contacts].reverse().forEach(p=>{
+      const chip = document.createElement('div');
+      chip.className = 'contact-chip';
+      chip.innerHTML = `<span>👤 ${escapeHtml(p.name)}</span>${p.phone ? `<span class="mono">${escapeHtml(p.phone)}</span>` : ''}`;
+      contactsWrap.appendChild(chip);
+    });
+  }
+
+  const orders = DB.getOrders().filter(o=>o.customerId===c.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const tbody = document.getElementById('customerDetailOrders');
+  if(!orders.length){
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش فواتير مسجلة للمتعامل ده لسه</td></tr>';
+  } else {
+    tbody.innerHTML = '';
+    orders.forEach(o=>{
+      const dt = new Date(o.date);
+      const tr = document.createElement('tr');
+      tr.className = 'clickable-row';
+      tr.title = 'دوس عشان تفتح الفاتورة';
+      tr.innerHTML = `
+        <td class="mono">#${o.number}</td>
+        <td class="mono">${dt.toLocaleDateString('ar-EG')}</td>
+        <td><strong>👤 ${escapeHtml(o.contactName || '—')}</strong></td>
+        <td class="mono">${money(o.total)}</td>
+        <td>${paymentMethodLabel(o.method)}</td>
+        <td class="mono"><strong class="order-points">${o.pointsEarned ? '🎁 +'+o.pointsEarned : '—'}</strong></td>`;
+      tr.onclick = ()=>{ closeModal('customerDetailModal'); showReceipt(o); };
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById('customerDetailEditBtn').onclick = ()=>{
+    closeModal('customerDetailModal');
+    openCustomerModal(c);
+  };
+
+  openModal('customerDetailModal');
 }
 document.getElementById('customerSearchInput').addEventListener('input', e=>{
   state.customerSearchTerm = e.target.value;
@@ -1193,7 +1392,7 @@ document.getElementById('customerSearchInput').addEventListener('input', e=>{
 });
 
 function openCustomerModal(customer){
-  document.getElementById('customerModalTitle').textContent = customer ? 'تعديل عميل' : 'إضافة عميل';
+  document.getElementById('customerModalTitle').textContent = customer ? 'تعديل متعامل' : 'إضافة متعامل';
   document.getElementById('editCustomerId').value = customer ? customer.id : '';
   document.getElementById('cName').value = customer?.name || '';
   document.getElementById('cPhone').value = customer?.phone || '';
@@ -1204,19 +1403,19 @@ document.getElementById('addCustomerBtn').addEventListener('click', ()=>openCust
 document.getElementById('saveCustomerBtn').addEventListener('click', ()=>{
   const name = document.getElementById('cName').value.trim();
   const phone = document.getElementById('cPhone').value.trim();
-  if(!name){ showToast('اكتب اسم العميل'); return; }
+  if(!name){ showToast('اكتب اسم المتعامل'); return; }
   const editId = document.getElementById('editCustomerId').value;
   const customers = DB.getCustomers();
   if(editId){
     const idx = customers.findIndex(c=>c.id===editId);
     if(idx>-1) customers[idx] = { ...customers[idx], name, phone };
   } else {
-    customers.push({ id: uid('cust'), name, phone, points:0, purchaseCount:0, purchaseTotal:0, createdAt:new Date().toISOString() });
+    customers.push({ id: uid('cust'), name, phone, points:0, purchaseCount:0, purchaseTotal:0, contacts:[], createdAt:new Date().toISOString() });
   }
   DB.saveCustomers(customers);
   closeModal('customerModal');
   renderCustomersView();
-  showToast('تم حفظ بيانات العميل');
+  showToast('تم حفظ بيانات المتعامل');
 });
 
 function deleteCustomer(id){
@@ -1224,13 +1423,73 @@ function deleteCustomer(id){
   const target = customers.find(c=>c.id===id);
   if(!target) return;
   const debt = customerCreditRemaining(id);
-  if(debt > 0.01){ showToast('العميل ده لسه عليه فلوس آجل، مينفعش تمسحه'); return; }
-  if(!confirm(`متأكد إنك عاوز تمسح العميل «${target.name}»؟`)) return;
+  if(debt > 0.01){ showToast('المتعامل ده لسه عليه فلوس آجل، مينفعش تمسحه'); return; }
+  if(!confirm(`متأكد إنك عاوز تمسح المتعامل «${target.name}»؟`)) return;
   DB.saveCustomers(customers.filter(c=>c.id!==id));
-  if(state.selectedCustomer?.id===id){ state.selectedCustomer = null; renderCart(); }
+  if(state.selectedCustomer?.id===id){ state.selectedCustomer = null; state.selectedContact = null; renderCart(); }
   renderCustomersView();
-  showToast('تم حذف العميل');
+  showToast('تم حذف المتعامل');
 }
+
+/* ---- Search: total loyalty points for a specific person (by name), across
+   every invoice and every company they've ever received a sale under ---- */
+function openContactSearchModal(){
+  document.getElementById('contactSearchInput').value = '';
+  renderContactSearchResults();
+  openModal('contactSearchModal');
+  setTimeout(()=>document.getElementById('contactSearchInput').focus(), 50);
+}
+
+function renderContactSearchResults(){
+  const term = document.getElementById('contactSearchInput').value.trim().toLowerCase();
+  const summary = document.getElementById('contactSearchSummary');
+  const tbody = document.getElementById('contactSearchTable');
+
+  if(!term){
+    summary.classList.add('hidden');
+    summary.innerHTML = '';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">اكتب اسم العميل فوق عشان تشوف كل فواتيره ونقاطه</td></tr>';
+    return;
+  }
+
+  const customers = DB.getCustomers();
+  const matches = DB.getOrders()
+    .filter(o => o.contactName && o.contactName.toLowerCase().includes(term))
+    .sort((a,b)=> new Date(b.date) - new Date(a.date));
+
+  if(!matches.length){
+    summary.classList.add('hidden');
+    summary.innerHTML = '';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش فواتير باسم عميل شبه ده</td></tr>';
+    return;
+  }
+
+  const totalPoints = matches.reduce((s,o)=>s + (o.pointsEarned||0), 0);
+  const totalAmount = matches.reduce((s,o)=>s + (o.total||0), 0);
+  summary.classList.remove('hidden');
+  summary.innerHTML = `🎁 إجمالي النقاط: <strong>${totalPoints}</strong> نقطة — على <strong>${matches.length}</strong> فاتورة — بإجمالي مشتريات <strong>${money(totalAmount)}</strong> ج.م`;
+
+  tbody.innerHTML = '';
+  matches.forEach(o=>{
+    const company = customers.find(c=>c.id===o.customerId);
+    const dt = new Date(o.date);
+    const tr = document.createElement('tr');
+    tr.className = 'clickable-row';
+    tr.title = 'دوس عشان تفتح الفاتورة';
+    tr.innerHTML = `
+      <td class="mono">#${o.number}</td>
+      <td>${escapeHtml(company ? company.name : '—')}</td>
+      <td class="mono">${dt.toLocaleDateString('ar-EG')}</td>
+      <td class="mono">${money(o.total)}</td>
+      <td>${paymentMethodLabel(o.method)}</td>
+      <td class="mono"><strong class="order-points">${o.pointsEarned ? '🎁 +'+o.pointsEarned : '—'}</strong></td>`;
+    tr.onclick = ()=>{ closeModal('contactSearchModal'); showReceipt(o); };
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById('searchContactPointsBtn').addEventListener('click', openContactSearchModal);
+document.getElementById('contactSearchInput').addEventListener('input', renderContactSearchResults);
 
 /* =========================================================
    CREDIT SALES VIEW (البيع الآجل)
@@ -1493,10 +1752,15 @@ function renderInventory(){
       <td>
         <div class="row-actions">
           <button class="icon-btn" title="تعديل">✏️</button>
+          <button class="icon-btn" title="طباعة باركود">🖨️</button>
           <button class="icon-btn" title="حذف">🗑️</button>
         </div>
       </td>`;
     tr.querySelector('[title="تعديل"]').onclick = ()=>openProductModal(p);
+    tr.querySelector('[title="طباعة باركود"]').onclick = ()=>{
+      if(!p.sku){ showToast('الصنف ده لسه ملوش كود/باركود — افتح تعديل الصنف ودوس توليد'); return; }
+      printBarcodeLabels(p.name, p.price, p.sku);
+    };
     tr.querySelector('[title="حذف"]').onclick = ()=>{
       if(confirm('تأكيد حذف "'+p.name+'"؟')){
         DB.saveProducts(DB.getProducts().filter(x=>x.id!==p.id));
@@ -1510,6 +1774,98 @@ function renderInventory(){
   document.getElementById('statTotalUnits').textContent = totalUnits;
   document.getElementById('statLowStock').textContent = lowStock;
   document.getElementById('statStockValue').textContent = money(stockValue);
+}
+
+/* ---- Restock by barcode scan (المخزون) ---- */
+const restockScanBtn = document.getElementById('restockScanBtn');
+const restockInput = document.getElementById('restockInput');
+const restockFeedback = document.getElementById('restockFeedback');
+const restockResult = document.getElementById('restockResult');
+
+restockScanBtn.addEventListener('click', ()=>{
+  restockFeedback.innerHTML = '';
+  restockResult.classList.add('hidden');
+  restockInput.value = '';
+  openModal('restockModal');
+  setTimeout(()=>restockInput.focus(), 60);
+});
+
+restockInput.addEventListener('keydown', e=>{
+  if(e.key === 'Enter'){
+    e.preventDefault();
+    handleRestockScan(restockInput.value);
+    restockInput.value = '';
+  }
+});
+
+let restockBurstTimer = null;
+restockInput.addEventListener('input', ()=>{
+  clearTimeout(restockBurstTimer);
+  restockBurstTimer = setTimeout(()=>{
+    if(restockInput.value.trim().length >= 3){
+      handleRestockScan(restockInput.value);
+      restockInput.value = '';
+    }
+  }, 250);
+});
+
+function handleRestockScan(raw){
+  const code = raw.trim();
+  if(!code) return;
+
+  const product = DB.getProducts().find(p => (p.sku||'').trim().toLowerCase() === code.toLowerCase());
+
+  if(!product){
+    restockResult.classList.add('hidden');
+    restockFeedback.innerHTML = `<div class="barcode-msg error">✕ مفيش صنف بالكود «${escapeHtml(code)}»</div>`;
+    return;
+  }
+
+  restockFeedback.innerHTML = '';
+  renderRestockResult(product.id);
+}
+
+function renderRestockResult(productId){
+  const product = DB.getProducts().find(p=>p.id===productId);
+  if(!product){ restockResult.classList.add('hidden'); return; }
+
+  restockResult.classList.remove('hidden');
+  document.getElementById('restockProductHead').innerHTML = `
+    <span class="rp-name">${escapeHtml(product.name)}</span>
+    <span class="rp-sku">${escapeHtml(product.sku||'')}</span>`;
+
+  const wrap = document.getElementById('restockVariantRows');
+  wrap.innerHTML = '';
+
+  if(!product.variants.length){
+    wrap.innerHTML = `<div class="barcode-msg error">الصنف ده لسه ملوش مقاسات مضافة — عدّله من زرار التعديل</div>`;
+    return;
+  }
+
+  product.variants.forEach(v=>{
+    const row = document.createElement('div');
+    row.className = 'restock-variant-row';
+    row.innerHTML = `
+      <span class="restock-variant-label">${escapeHtml(v.size)}${v.color && v.color!=='—' ? ' · '+escapeHtml(v.color) : ''}</span>
+      <span class="restock-variant-qty">الحالي: ${v.qty}</span>
+      <input type="number" min="1" value="1" data-vid="${v.id}">
+      <button class="restock-add-btn" data-vid="${v.id}">+ إضافة</button>`;
+    row.querySelector('.restock-add-btn').onclick = ()=>{
+      const addQty = Math.max(1, Number(row.querySelector('input').value)||1);
+      const products = DB.getProducts();
+      const pIdx = products.findIndex(pp=>pp.id===product.id);
+      if(pIdx===-1) return;
+      const variant = products[pIdx].variants.find(vv=>vv.id===v.id);
+      if(!variant) return;
+      variant.qty = (variant.qty||0) + addQty;
+      DB.saveProducts(products);
+      showToast(`✓ اتزودت ${addQty} في ${product.name} — ${v.size}`);
+      renderInventory();
+      renderRestockResult(product.id);
+      setTimeout(()=>restockInput.focus(), 30);
+    };
+    wrap.appendChild(row);
+  });
 }
 
 /* ---- Product modal (add / edit) ---- */
@@ -1533,12 +1889,103 @@ function openProductModal(product){
   document.getElementById('fBrand').value = product?.brand || '';
   document.getElementById('fCategory').value = product?.category || '';
   document.getElementById('fSku').value = product?.sku || '';
+  renderSkuBarcodePreview(product?.sku || '');
   document.getElementById('fCost').value = product?.cost || '';
   document.getElementById('fPrice').value = product?.price || '';
 
   state.editVariantRows = product ? product.variants.map(v=>({...v})) : [{id:uid('v'), size:'', color:'', qty:0}];
   renderVariantRows();
   openModal('productModal');
+}
+
+/* ---- SKU / barcode generate + print (product modal) ---- */
+function generateUniqueBarcodeCode(){
+  const existing = new Set(DB.getProducts().map(p=>(p.sku||'').trim().toUpperCase()));
+  let code;
+  do {
+    // 12-digit numeric code: timestamp tail + random digits, scanner-friendly.
+    code = (Date.now().toString().slice(-8) + Math.floor(Math.random()*10000).toString().padStart(4,'0'));
+  } while(existing.has(code));
+  return code;
+}
+
+function renderSkuBarcodePreview(value){
+  const holder = document.getElementById('fSkuBarcodePreview');
+  const code = (value||'').trim();
+  holder.innerHTML = '';
+  if(!code || typeof JsBarcode === 'undefined') return;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  holder.appendChild(svg);
+  try{
+    JsBarcode(svg, code, { format:'CODE128', displayValue:true, width:2, height:56, fontSize:13, margin:6 });
+  }catch(err){
+    holder.innerHTML = '';
+  }
+}
+
+const fSkuInput = document.getElementById('fSku');
+fSkuInput.addEventListener('input', ()=>renderSkuBarcodePreview(fSkuInput.value));
+
+document.getElementById('generateSkuBtn').addEventListener('click', ()=>{
+  fSkuInput.value = generateUniqueBarcodeCode();
+  renderSkuBarcodePreview(fSkuInput.value);
+});
+
+document.getElementById('printSkuBtn').addEventListener('click', ()=>{
+  const code = fSkuInput.value.trim();
+  if(!code){ showToast('محتاج تكتب كود أو تدوس توليد الأول'); return; }
+  const name = document.getElementById('fName').value.trim() || 'صنف';
+  const price = Number(document.getElementById('fPrice').value)||0;
+  printBarcodeLabels(name, price, code);
+});
+
+function printBarcodeLabels(name, price, code){
+  const copiesRaw = prompt('كام ملصق عايز تطبع؟', '1');
+  if(copiesRaw===null) return;
+  const copies = Math.max(1, Math.min(200, Number(copiesRaw)||1));
+
+  const tmp = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  let svgMarkup = '';
+  try{
+    JsBarcode(tmp, code, { format:'CODE128', displayValue:true, width:2, height:50, fontSize:12, margin:4 });
+    svgMarkup = tmp.outerHTML;
+  }catch(err){
+    showToast('الكود ده مش صالح لطباعة باركود');
+    return;
+  }
+
+  const win = window.open('', '_blank');
+  if(!win){ showToast('المتصفح منع فتح نافذة الطباعة'); return; }
+
+  const labelHtml = `
+    <div class="label">
+      <div class="label-name">${escapeHtml(name)}</div>
+      ${svgMarkup}
+      <div class="label-price">${money(price)} ج.م</div>
+    </div>`;
+
+  win.document.write(`
+    <!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+    <title>طباعة باركود</title>
+    <style>
+      * { box-sizing:border-box; }
+      body{ font-family:'Cairo',Arial,sans-serif; margin:0; padding:10px; background:#fff; }
+      .labels{ display:flex; flex-wrap:wrap; gap:8px; }
+      .label{
+        width:200px; padding:10px; border:1px dashed #999; border-radius:6px;
+        display:flex; flex-direction:column; align-items:center; text-align:center;
+        page-break-inside:avoid;
+      }
+      .label-name{ font-size:13px; font-weight:700; color:#111; margin-bottom:4px; }
+      .label-price{ font-size:14px; font-weight:800; color:#111; margin-top:2px; }
+      svg{ max-width:100%; }
+      @media print { .label{ border:none; } }
+    </style>
+    </head><body>
+    <div class="labels">${labelHtml.repeat(copies)}</div>
+    <script>window.onload = () => { window.print(); };<\/script>
+    </body></html>`);
+  win.document.close();
 }
 
 function renderVariantRows(){

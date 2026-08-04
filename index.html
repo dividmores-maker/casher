@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Orbitron:wght@600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js"></script>
 </head>
 <body>
 
@@ -238,23 +239,26 @@
       </div>
     </section>
 
-    <!-- CUSTOMERS VIEW (العملاء ونقاط الولاء) -->
+    <!-- CUSTOMERS VIEW (المتعاملين ونقاط الولاء) -->
     <section class="view hidden" id="view-customers">
       <div class="view-header">
-        <h1>العملاء</h1>
-        <button class="btn-primary" id="addCustomerBtn">+ إضافة عميل</button>
+        <h1>العملاء (المتعاملين)</h1>
+        <div class="view-header-actions">
+          <button class="btn-ghost" id="searchContactPointsBtn">🔍 نقاط عميل بالاسم</button>
+          <button class="btn-primary" id="addCustomerBtn">+ إضافة متعامل</button>
+        </div>
       </div>
 
       <div class="search-box" style="margin-bottom:16px;max-width:360px;">
         <span class="search-icon">🔍</span>
-        <input type="text" id="customerSearchInput" placeholder="دور بالاسم أو رقم التليفون...">
+        <input type="text" id="customerSearchInput" placeholder="دور باسم المتعامل أو رقم التليفون...">
       </div>
 
       <div class="inventory-table-wrap">
         <table class="inventory-table">
           <thead>
             <tr>
-              <th>الاسم</th>
+              <th>اسم المتعامل</th>
               <th>التليفون</th>
               <th>عدد المشتريات</th>
               <th>إجمالي المشتريات</th>
@@ -314,7 +318,10 @@
     <section class="view hidden" id="view-inventory">
       <div class="view-header">
         <h1>المخزون</h1>
-        <button class="btn-primary" id="addProductBtn">+ إضافة صنف جديد</button>
+        <div class="view-header-actions">
+          <button class="btn-ghost" id="restockScanBtn">📷 تزويد الكمية بالباركود</button>
+          <button class="btn-primary" id="addProductBtn">+ إضافة صنف جديد</button>
+        </div>
       </div>
 
       <div class="inventory-stats">
@@ -505,8 +512,13 @@
           <input type="text" id="fCategory" placeholder="مثال: رياضي / كلاسيك">
         </div>
         <div class="form-field">
-          <label>كود الصنف (SKU)</label>
-          <input type="text" id="fSku" placeholder="اختياري">
+          <label>كود الصنف / الباركود (SKU)</label>
+          <div class="sku-field-row">
+            <input type="text" id="fSku" placeholder="اكتب كود أو دوس توليد" class="mono-input">
+            <button type="button" class="btn-ghost-sm" id="generateSkuBtn" title="توليد باركود جديد">🎲 توليد</button>
+            <button type="button" class="btn-ghost-sm" id="printSkuBtn" title="طباعة الباركود">🖨️ طباعة</button>
+          </div>
+          <div class="barcode-preview" id="fSkuBarcodePreview"></div>
         </div>
       </div>
       <div class="form-row">
@@ -691,6 +703,28 @@
   </div>
 </div>
 
+<!-- Restock by Barcode Modal (زيادة الكمية بمسح الباركود من المخزون) -->
+<div class="modal-overlay hidden" id="restockModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>📷 تزويد الكمية بالباركود</h2>
+      <button class="modal-close" data-close="restockModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="barcode-scan-box">
+        <div class="barcode-icon">📦</div>
+        <input type="text" id="restockInput" class="barcode-input mono" placeholder="امسح باركود الصنف هنا..." autocomplete="off">
+        <div class="barcode-hint">امسح الباركود أو اكتب كود الصنف ودوس Enter — هيظهر لك الصنف عشان تزود كميته</div>
+      </div>
+      <div class="barcode-feedback" id="restockFeedback"></div>
+      <div class="restock-result hidden" id="restockResult">
+        <div class="restock-product-head" id="restockProductHead"></div>
+        <div class="restock-variant-rows" id="restockVariantRows"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Receipt Modal -->
 <div class="modal-overlay hidden" id="receiptModal">
   <div class="modal modal-sm">
@@ -740,8 +774,8 @@
     </div>
     <div class="modal-body">
       <div class="form-field" style="margin-bottom:14px;">
-        <label>اسم العميل</label>
-        <input type="text" id="creditCustomerName" placeholder="مثال: أحمد محمود">
+        <label>اسم المتعامل</label>
+        <input type="text" id="creditCustomerName" placeholder="مثال: متعامل النور للتجارة">
       </div>
       <div class="form-field" style="margin-bottom:14px;">
         <label>رقم التليفون (اختياري)</label>
@@ -760,53 +794,149 @@
   </div>
 </div>
 
-<!-- Customer Picker Modal (choose a customer while building a sale) -->
+<!-- Customer Picker Modal (choose a company, then the specific person receiving this invoice) -->
 <div class="modal-overlay hidden" id="customerPickerModal">
   <div class="modal modal-sm">
     <div class="modal-head">
-      <h2>👤 اختيار عميل</h2>
+      <h2 id="customerPickerTitle">🏢 اختيار المتعامل</h2>
       <button class="modal-close" data-close="customerPickerModal">✕</button>
     </div>
     <div class="modal-body">
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input type="text" id="customerPickerSearch" placeholder="دور بالاسم أو رقم التليفون...">
-      </div>
-      <div class="picker-options" id="customerPickerList" style="margin-top:12px;"></div>
 
-      <div class="customer-quick-add">
-        <div class="quick-add-head">مش لاقي العميل؟ ضيفه بسرعة</div>
-        <div class="form-row">
-          <input type="text" id="quickAddCustomerName" placeholder="اسم العميل">
-          <input type="text" id="quickAddCustomerPhone" placeholder="رقم التليفون (اختياري)">
+      <!-- Step 1: pick or add the company -->
+      <div id="customerPickerStepCompany">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="customerPickerSearch" placeholder="دور باسم المتعامل أو رقم التليفون...">
         </div>
-        <button class="btn-primary btn-shift-wide" id="quickAddCustomerBtn">+ إضافة واختيار</button>
+        <div class="picker-options" id="customerPickerList" style="margin-top:12px;"></div>
+
+        <div class="customer-quick-add">
+          <div class="quick-add-head">مش لاقي المتعامل؟ ضيفه بسرعة</div>
+          <div class="form-row">
+            <input type="text" id="quickAddCustomerName" placeholder="اسم المتعامل">
+            <input type="text" id="quickAddCustomerPhone" placeholder="تليفون المتعامل (اختياري)">
+          </div>
+          <button class="btn-primary btn-shift-wide" id="quickAddCustomerBtn">+ إضافة واختيار</button>
+        </div>
       </div>
+
+      <!-- Step 2: the specific person (name + phone) receiving this invoice, under the chosen company -->
+      <div class="hidden" id="customerPickerStepContact">
+        <button class="ticket-customer-pick" id="customerPickerBackBtn" style="margin-bottom:10px;">→ رجوع لاختيار متعامل تاني</button>
+        <div class="customer-picker-company-badge" id="customerPickerCompanyBadge"></div>
+
+        <div class="picker-options" id="customerPickerContactChips" style="margin:10px 0;"></div>
+
+        <div class="form-field" style="margin-bottom:14px;">
+          <label>اسم العميل (اللي هيستلم الفاتورة)</label>
+          <input type="text" id="contactNameInput" placeholder="مثال: أحمد محمود">
+        </div>
+        <div class="form-field">
+          <label>رقم التليفون (اختياري)</label>
+          <input type="text" id="contactPhoneInput" placeholder="01xxxxxxxxx">
+        </div>
+
+        <button class="btn-primary btn-shift-wide" id="confirmContactBtn" style="margin-top:14px;">تم — استخدم البيانات دي</button>
+      </div>
+
     </div>
   </div>
 </div>
 
-<!-- Add/Edit Customer Modal -->
+<!-- Add/Edit Customer (Company) Modal -->
 <div class="modal-overlay hidden" id="customerModal">
   <div class="modal modal-sm">
     <div class="modal-head">
-      <h2 id="customerModalTitle">إضافة عميل</h2>
+      <h2 id="customerModalTitle">إضافة متعامل</h2>
       <button class="modal-close" data-close="customerModal">✕</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="editCustomerId">
       <div class="form-field" style="margin-bottom:14px;">
-        <label>اسم العميل</label>
-        <input type="text" id="cName" placeholder="مثال: محمد علي">
+        <label>اسم المتعامل</label>
+        <input type="text" id="cName" placeholder="مثال: متعامل النور للتجارة">
       </div>
       <div class="form-field">
-        <label>رقم التليفون (اختياري)</label>
+        <label>رقم تليفون المتعامل (اختياري)</label>
         <input type="text" id="cPhone" placeholder="01xxxxxxxxx">
       </div>
     </div>
     <div class="modal-foot">
       <button class="btn-ghost" data-close="customerModal">إلغاء</button>
-      <button class="btn-primary" id="saveCustomerBtn">حفظ العميل</button>
+      <button class="btn-primary" id="saveCustomerBtn">حفظ المتعامل</button>
+    </div>
+  </div>
+</div>
+
+<!-- Customer Detail Modal (النقاط + الأشخاص المسجلين + سجل الفواتير) -->
+<div class="modal-overlay hidden" id="customerDetailModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2 id="customerDetailName">🏢 بيانات المتعامل</h2>
+      <button class="modal-close" data-close="customerDetailModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="customer-detail-contact" id="customerDetailContact"></div>
+      <div class="report-stats" id="customerDetailStats"></div>
+
+      <h3 class="customer-detail-subhead">الأشخاص المسجلين تحت المتعامل ده</h3>
+      <div class="customer-contacts-list" id="customerDetailContactsList"></div>
+
+      <h3 class="customer-detail-subhead">سجل الفواتير</h3>
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>رقم الفاتورة</th>
+              <th>التاريخ</th>
+              <th>اسم العميل</th>
+              <th>الإجمالي</th>
+              <th>طريقة الدفع</th>
+              <th>النقاط 🎁</th>
+            </tr>
+          </thead>
+          <tbody id="customerDetailOrders"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="customerDetailModal">إغلاق</button>
+      <button class="btn-primary" id="customerDetailEditBtn">✏️ تعديل بيانات المتعامل</button>
+    </div>
+  </div>
+</div>
+
+<!-- Search customer points by contact name (across all invoices, any company) -->
+<div class="modal-overlay hidden" id="contactSearchModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2>🔍 بحث عن نقاط عميل بالاسم</h2>
+      <button class="modal-close" data-close="contactSearchModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="contactSearchInput" placeholder="اكتب اسم العميل (الشخص) اللي عايز تعرف نقطه...">
+      </div>
+
+      <div class="contact-search-summary hidden" id="contactSearchSummary"></div>
+
+      <div class="inventory-table-wrap" style="margin-top:14px;">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>رقم الفاتورة</th>
+              <th>المتعامل</th>
+              <th>التاريخ</th>
+              <th>الإجمالي</th>
+              <th>طريقة الدفع</th>
+              <th>النقاط 🎁</th>
+            </tr>
+          </thead>
+          <tbody id="contactSearchTable"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>

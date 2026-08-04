@@ -353,6 +353,28 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 .ticket-customer-actions button:hover{color:var(--text);}
 
 .customer-quick-add{margin-top:16px;padding:14px;border-radius:12px;background:var(--leather-tint);border:1px solid rgba(168,85,247,0.35);}
+
+.ticket-customer-pick-required{color:var(--danger);}
+.ticket-customer-pick-required:hover{color:var(--danger);}
+
+.customer-name-link{background:none;border:none;padding:0;margin:0;font:inherit;font-weight:700;color:var(--text);cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;}
+.customer-name-link:hover{color:var(--violet);}
+
+.customer-detail-contact{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;font-size:14px;color:var(--text-dim);}
+.customer-detail-contact strong{color:var(--text);}
+.customer-detail-subhead{margin:18px 0 10px;font-size:15px;}
+
+.customer-picker-company-badge{padding:10px 12px;border-radius:10px;background:var(--leather-tint);border:1px solid rgba(168,85,247,0.35);font-size:13px;color:var(--text-dim);margin-bottom:6px;}
+.customer-picker-company-badge strong{color:var(--text);}
+
+.customer-contacts-list{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;}
+.contact-chip{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,0.04);border:1px solid var(--line);font-size:13px;}
+.contact-chip .mono{color:var(--text-dim);}
+
+.order-points{color:var(--lime);}
+
+.contact-search-summary{margin-top:14px;padding:14px 16px;border-radius:12px;background:var(--pine-tint);border:1px solid rgba(182,255,60,0.35);font-size:15px;}
+.contact-search-summary strong{color:var(--lime);font-family:'IBM Plex Mono',monospace;}
 .quick-add-head{font-size:13px;color:var(--text);margin-bottom:10px;font-weight:700;}
 .shift-log-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(85px,1fr));gap:10px;}
 .shift-log-grid div{display:flex;flex-direction:column;gap:2px;}
@@ -367,6 +389,7 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
   flex-wrap:wrap;
   gap:12px;
 }
+.view-header-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .view-header h1{
   font-family:'Cairo',sans-serif;
   font-weight:900;
@@ -849,6 +872,8 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 }
 .inventory-table tr:last-child td{border-bottom:none;}
 .inventory-table tr:hover td{background:rgba(255,255,255,0.04);}
+.clickable-row{cursor:pointer;}
+.clickable-row:hover td{background:rgba(168,85,247,0.08)!important;}
 
 .size-tags{display:flex;gap:5px;flex-wrap:wrap;}
 .size-tag{
@@ -1006,6 +1031,10 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
   padding:20px;
 }
 .modal-overlay.hidden{display:none;}
+/* The receipt can be opened from on top of other open modals (customer
+   detail, contact-points search, etc.) — make sure it always stacks above
+   them instead of rendering underneath. */
+#receiptModal{z-index:300;}
 .modal{
   background:linear-gradient(160deg, var(--bg2), var(--bg3));
   border:1px solid var(--line);
@@ -1018,6 +1047,7 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
   box-shadow:var(--shadow-lg);
 }
 .modal-sm{max-width:420px;}
+.modal-lg{max-width:720px;}
 .modal-head{
   display:flex;
   align-items:center;
@@ -1147,6 +1177,75 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 .barcode-hint{font-size:12px;color:var(--text-dim);}
 
 .barcode-feedback{padding:0 4px 4px;min-height:20px;}
+
+/* ===== SKU / barcode generation + printing (product modal) ===== */
+.sku-field-row{display:flex;gap:6px;}
+.sku-field-row input{flex:1;min-width:0;}
+.sku-field-row .btn-ghost-sm{white-space:nowrap;flex-shrink:0;}
+.barcode-preview{
+  margin-top:10px;
+  min-height:0;
+  display:flex;
+  justify-content:center;
+  background:#fff;
+  border-radius:9px;
+  padding:0;
+  overflow:hidden;
+}
+.barcode-preview:empty{padding:0;}
+.barcode-preview svg{max-width:100%;}
+
+/* ===== Restock-by-scan modal (inventory) ===== */
+.restock-result{margin-top:16px;}
+.restock-product-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:10px 14px;
+  border:1px solid var(--line-strong);
+  border-radius:10px;
+  background:var(--leather-tint);
+  margin-bottom:12px;
+}
+.restock-product-head .rp-name{font-weight:800;font-size:15px;}
+.restock-product-head .rp-sku{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text-dim);}
+.restock-variant-rows{display:flex;flex-direction:column;gap:8px;}
+.restock-variant-row{
+  display:grid;
+  grid-template-columns:1fr auto 90px auto;
+  gap:10px;
+  align-items:center;
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--line);
+  border-radius:9px;
+  padding:10px 12px;
+}
+.restock-variant-label{font-size:13.5px;font-weight:700;}
+.restock-variant-qty{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--text-dim);}
+.restock-variant-row input{
+  width:100%;
+  padding:8px 10px;
+  border-radius:7px;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,0.05);
+  color:var(--text);
+  font-family:'IBM Plex Mono',monospace;
+  font-size:13px;
+  text-align:center;
+}
+.restock-add-btn{
+  background:var(--lime);
+  color:#10240a;
+  border:none;
+  border-radius:7px;
+  padding:8px 12px;
+  font-weight:800;
+  font-size:12.5px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.restock-add-btn:hover{filter:brightness(1.08);}
+.restock-add-btn:disabled{opacity:.4;cursor:not-allowed;}
 .barcode-msg{
   margin-top:10px;
   padding:10px 14px;
