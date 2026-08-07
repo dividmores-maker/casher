@@ -71,17 +71,20 @@
       <button class="nav-item active" data-view="sales">
         <span class="nav-icon">🧾</span><span>البيع</span>
       </button>
-      <button class="nav-item" data-view="expenses">
-        <span class="nav-icon">💸</span><span>المصاريف</span>
-      </button>
       <button class="nav-item" data-view="customers">
         <span class="nav-icon">👥</span><span>العملاء</span>
       </button>
       <button class="nav-item" data-view="credit">
         <span class="nav-icon">🗓️</span><span>البيع الآجل</span>
       </button>
+      <button class="nav-item" data-view="purchases">
+        <span class="nav-icon">🚚</span><span>المشتروات</span>
+      </button>
+      <button class="nav-item" data-view="workers" data-admin-only="true">
+        <span class="nav-icon">👷</span><span>العمال</span>
+      </button>
       <button class="nav-item" data-view="inventory" data-admin-only="true">
-        <span class="nav-icon">📦</span><span>المخزون</span>
+        <span class="nav-icon">📦</span><span>المخزون</span><span class="nav-badge hidden" id="lowStockBadge">0</span>
       </button>
       <button class="nav-item" data-view="reports" data-admin-only="true">
         <span class="nav-icon">📊</span><span>التقارير</span>
@@ -120,6 +123,13 @@
 
   <!-- Main -->
   <main class="main">
+
+    <!-- Global low-stock alert bar — visible on every view until resolved -->
+    <div class="low-stock-bar hidden" id="lowStockBar">
+      <span class="low-stock-bar-icon">⚠️</span>
+      <span class="low-stock-bar-text" id="lowStockBarText"></span>
+      <button class="low-stock-bar-btn" id="lowStockBarBtn">عرض التفاصيل</button>
+    </div>
 
     <!-- SALES VIEW -->
     <section class="view" id="view-sales">
@@ -189,56 +199,6 @@
       </div>
     </section>
 
-    <!-- EXPENSES VIEW -->
-    <section class="view hidden" id="view-expenses">
-      <div class="view-header">
-        <h1>المصاريف</h1>
-        <button class="btn-primary" id="addExpenseBtn">+ إضافة مصروف</button>
-      </div>
-
-      <div class="report-range expense-range" id="expenseRange">
-        <button class="chip active" data-erange="today">اليوم</button>
-        <button class="chip" data-erange="month">الشهر</button>
-        <button class="chip" data-erange="all">كل الوقت</button>
-      </div>
-
-      <div class="expense-cat-filter" id="expenseCatFilter">
-        <button class="chip active" data-ecat="all">الكل</button>
-        <button class="chip" data-ecat="goods">📦 بضاعة</button>
-        <button class="chip" data-ecat="salaries">👥 رواتب</button>
-        <button class="chip" data-ecat="loans">💰 سلف</button>
-        <button class="chip" data-ecat="suppliers">🚚 موردين</button>
-        <button class="chip" data-ecat="other">🔖 أخرى</button>
-      </div>
-
-      <div class="report-stats">
-        <div class="stat-card warn">
-          <div class="stat-label">إجمالي المصاريف</div>
-          <div class="stat-value mono" id="expTotal">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">عدد العمليات</div>
-          <div class="stat-value mono" id="expCount">0</div>
-        </div>
-      </div>
-
-      <div class="inventory-table-wrap">
-        <table class="inventory-table">
-          <thead>
-            <tr>
-              <th>التاريخ</th>
-              <th>النوع</th>
-              <th>البيان</th>
-              <th>المبلغ</th>
-              <th>بواسطة</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="expensesTableBody"></tbody>
-        </table>
-      </div>
-    </section>
-
     <!-- CUSTOMERS VIEW (المتعاملين ونقاط الولاء) -->
     <section class="view hidden" id="view-customers">
       <div class="view-header">
@@ -251,13 +211,14 @@
 
       <div class="search-box" style="margin-bottom:16px;max-width:360px;">
         <span class="search-icon">🔍</span>
-        <input type="text" id="customerSearchInput" placeholder="دور باسم المتعامل أو رقم التليفون...">
+        <input type="text" id="customerSearchInput" placeholder="دور بالاسم، الكود، أو رقم التليفون...">
       </div>
 
       <div class="inventory-table-wrap">
         <table class="inventory-table">
           <thead>
             <tr>
+              <th>الكود</th>
               <th>اسم المتعامل</th>
               <th>التليفون</th>
               <th>عدد المشتريات</th>
@@ -310,6 +271,101 @@
             </tr>
           </thead>
           <tbody id="creditTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- PURCHASES VIEW (المشتروات — الموردين والتجار وعمليات الشراء) -->
+    <section class="view hidden" id="view-purchases">
+      <div class="view-header">
+        <h1>المشتروات</h1>
+        <div class="view-header-actions">
+          <button class="btn-ghost" id="manageSuppliersBtn">🚚 الموردين</button>
+          <button class="btn-primary" id="addPurchaseBtn">+ عملية شراء جديدة</button>
+        </div>
+      </div>
+
+      <div class="expense-cat-filter" id="purchaseFilter">
+        <button class="chip active" data-pfilter="open">لسه مستحق</button>
+        <button class="chip" data-pfilter="settled">اتسدد بالكامل</button>
+        <button class="chip" data-pfilter="all">الكل</button>
+      </div>
+
+      <div class="report-stats">
+        <div class="stat-card warn">
+          <div class="stat-label">إجمالي المستحق للموردين</div>
+          <div class="stat-value mono" id="purchaseOutstandingTotal">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">عدد عمليات الشراء المفتوحة</div>
+          <div class="stat-value mono" id="purchaseOpenCount">0</div>
+        </div>
+      </div>
+
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>المورد</th>
+              <th>الهاتف</th>
+              <th>البيان</th>
+              <th>الإجمالي</th>
+              <th>المدفوع</th>
+              <th>المتبقي</th>
+              <th>الحالة</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="purchasesTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- WORKERS VIEW (العمال — البيانات، المرتبات، السلف، المنح، المكافآت، الإجازات) -->
+    <section class="view hidden" id="view-workers">
+      <div class="view-header">
+        <h1>العمال</h1>
+        <div class="view-header-actions">
+          <button class="btn-primary" id="addWorkerBtn">+ إضافة عامل</button>
+        </div>
+      </div>
+
+      <div class="report-stats">
+        <div class="stat-card">
+          <div class="stat-label">عدد العمال</div>
+          <div class="stat-value mono" id="workerCountStat">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">إجمالي المرتبات الأساسية</div>
+          <div class="stat-value mono" id="workerSalariesStat">0</div>
+        </div>
+        <div class="stat-card warn">
+          <div class="stat-label">إجمالي السلف الحالية</div>
+          <div class="stat-value mono" id="workerAdvancesStat">0</div>
+        </div>
+        <div class="stat-card accent">
+          <div class="stat-label">إجمالي الصافي المستحق للعمال</div>
+          <div class="stat-value mono" id="workerNetStat">0</div>
+        </div>
+      </div>
+
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>الاسم</th>
+              <th>الوظيفة</th>
+              <th>التليفون</th>
+              <th>المرتب الأساسي</th>
+              <th>السلف</th>
+              <th>منح ومكافآت</th>
+              <th>الصافي المستحق</th>
+              <th>رصيد الإجازات</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="workersTableBody"></tbody>
         </table>
       </div>
     </section>
@@ -446,7 +502,30 @@
         <label>نظام نقاط الولاء — نقطة واحدة لكل كام جنيه؟ (سيبها 0 عشان تقفل النظام)</label>
         <input type="number" id="setPointsRate" min="0" step="1" placeholder="مثال: 10">
 
+        <label>تنبيهات نقص المخزون</label>
+        <div class="settings-checkbox-row">
+          <label class="settings-checkbox"><input type="checkbox" id="setLowStockOn"> فعّل تنبيهات لما أي صنف يقرب يخلص</label>
+        </div>
+        <input type="number" id="setLowStockThreshold" min="1" step="1" placeholder="مثال: 3 — يعني نبهني لما الكمية توصل 3 أو أقل">
+        <button class="btn-ghost" id="enableDesktopNotifsBtn" type="button">🔔 تفعيل تنبيهات سطح المكتب</button>
+        <p class="settings-hint" id="desktopNotifsStatus"></p>
+
         <button class="btn-primary" id="saveSettingsBtn">حفظ الإعدادات</button>
+
+        <div class="invoice-settings-section">
+          <h3 class="invoice-settings-title">🧾 محتوى الفاتورة المطبوعة</h3>
+          <p class="settings-hint">اختار البيانات اللي عايز تظهر في الفاتورة اللي بتتطبع للعميل.</p>
+          <div class="settings-checkbox-grid">
+            <label class="settings-checkbox"><input type="checkbox" id="invShowStoreInfo"> رقم تليفون / عنوان المحل</label>
+            <label class="settings-checkbox"><input type="checkbox" id="invShowCashier"> اسم الكاشير</label>
+            <label class="settings-checkbox"><input type="checkbox" id="invShowDiscount"> سطر الخصم</label>
+            <label class="settings-checkbox"><input type="checkbox" id="invShowPaymentMethod"> طريقة الدفع</label>
+            <label class="settings-checkbox"><input type="checkbox" id="invShowCustomerInfo"> بيانات العميل / المتعامل</label>
+            <label class="settings-checkbox"><input type="checkbox" id="invShowCustomerPhone"> رقم تليفون العميل</label>
+            <label class="settings-checkbox"><input type="checkbox" id="invShowPoints"> نقاط الولاء (المكتسبة / المخصومة)</label>
+            <label class="settings-checkbox"><input type="checkbox" id="invShowThankYou"> رسالة الشكر في آخر الفاتورة</label>
+          </div>
+        </div>
 
         <div class="danger-zone">
           <h3>منطقة الخطر</h3>
@@ -543,40 +622,6 @@
     <div class="modal-foot">
       <button class="btn-ghost" data-close="productModal">إلغاء</button>
       <button class="btn-primary" id="saveProductBtn">حفظ الصنف</button>
-    </div>
-  </div>
-</div>
-
-<!-- Add Expense Modal -->
-<div class="modal-overlay hidden" id="expenseModal">
-  <div class="modal modal-sm">
-    <div class="modal-head">
-      <h2>💸 إضافة مصروف</h2>
-      <button class="modal-close" data-close="expenseModal">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-field" style="margin-bottom:14px;">
-        <label>نوع المصروف</label>
-        <div class="cat-select" id="expenseCatSelect">
-          <button type="button" class="cat-btn" data-cat="goods">📦 بضاعة</button>
-          <button type="button" class="cat-btn" data-cat="salaries">👥 رواتب</button>
-          <button type="button" class="cat-btn" data-cat="loans">💰 سلف</button>
-          <button type="button" class="cat-btn" data-cat="suppliers">🚚 موردين</button>
-          <button type="button" class="cat-btn" data-cat="other">🔖 أخرى</button>
-        </div>
-      </div>
-      <div class="form-field">
-        <label>المبلغ</label>
-        <input type="number" id="eAmount" min="0" step="0.01" placeholder="0.00">
-      </div>
-      <div class="form-field" style="margin-top:14px;">
-        <label>البيان (سبب المصروف)</label>
-        <input type="text" id="eNote" placeholder="مثال: فاتورة كهرباء / نقل بضاعة">
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-ghost" data-close="expenseModal">إلغاء</button>
-      <button class="btn-primary" id="saveExpenseBtn">حفظ المصروف</button>
     </div>
   </div>
 </div>
@@ -794,6 +839,62 @@
   </div>
 </div>
 
+<!-- Edit / Return Invoice Modal (from Reports > سجل الفواتير — رجّع أصناف من الفاتورة وحدّث المخزون والحساب) -->
+<div class="modal-overlay hidden" id="orderEditModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2 id="orderEditTitle">✏️ تعديل الفاتورة</h2>
+      <button class="modal-close" data-close="orderEditModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="settings-hint">حدّد الكمية اللي عايز ترجعها من كل صنف. الكمية المرتجعة بترجع تلقائيًا للمخزون، والإجمالي وحساب المتعامل بيتحدّثوا معاها.</p>
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>الصنف</th>
+              <th>سعر القطعة</th>
+              <th>الكمية المباعة</th>
+              <th>الكمية المرتجعة</th>
+              <th>المتبقي بالفاتورة</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="orderEditItemsBody"></tbody>
+        </table>
+      </div>
+      <div class="report-stats" id="orderEditSummary" style="margin-top:14px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="orderEditModal">إلغاء</button>
+      <button class="btn-primary" id="saveOrderEditBtn">💾 حفظ التعديلات</button>
+    </div>
+  </div>
+</div>
+
+<!-- Redeem Points Modal (تسوية النقاط — discount the invoice using the selected customer's loyalty points) -->
+<div class="modal-overlay hidden" id="redeemPointsModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>🎁 تسوية النقاط</h2>
+      <button class="modal-close" data-close="redeemPointsModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="redeem-points-balance" id="redeemPointsBalance"></div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>عدد النقاط اللي عايز تستخدمها في خصم الفاتورة دي</label>
+        <input type="number" id="redeemPointsInput" min="0" step="1" value="0">
+      </div>
+      <div class="redeem-points-preview" id="redeemPointsPreview"></div>
+      <p class="settings-hint">تطبيق الخصم هيستبدل قيمة الخصم الحالية في الفاتورة بقيمة النقاط دي.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="redeemPointsModal">إلغاء</button>
+      <button class="btn-primary" id="confirmRedeemPointsBtn">تطبيق الخصم</button>
+    </div>
+  </div>
+</div>
+
 <!-- Customer Picker Modal (choose a company, then the specific person receiving this invoice) -->
 <div class="modal-overlay hidden" id="customerPickerModal">
   <div class="modal modal-sm">
@@ -807,7 +908,7 @@
       <div id="customerPickerStepCompany">
         <div class="search-box">
           <span class="search-icon">🔍</span>
-          <input type="text" id="customerPickerSearch" placeholder="دور باسم المتعامل أو رقم التليفون...">
+          <input type="text" id="customerPickerSearch" placeholder="دور بالاسم، الكود، أو رقم التليفون...">
         </div>
         <div class="picker-options" id="customerPickerList" style="margin-top:12px;"></div>
 
@@ -922,6 +1023,13 @@
 
       <div class="contact-search-summary hidden" id="contactSearchSummary"></div>
 
+      <!-- Small popup above the invoice row: print / edit / delete -->
+      <div class="invoice-actions-popover hidden" id="invoiceActionsPopover">
+        <button class="invoice-action-btn" id="invoiceActionPrint" title="طباعة الفاتورة">🖨️ طباعة</button>
+        <button class="invoice-action-btn" id="invoiceActionEdit" title="تعديل الفاتورة">✏️ تعديل</button>
+        <button class="invoice-action-btn danger" id="invoiceActionDelete" title="حذف الفاتورة">🗑️ حذف</button>
+      </div>
+
       <div class="inventory-table-wrap" style="margin-top:14px;">
         <table class="inventory-table">
           <thead>
@@ -958,6 +1066,345 @@
     <div class="modal-foot">
       <button class="btn-ghost" data-close="creditPaymentModal">إلغاء</button>
       <button class="btn-primary" id="confirmCreditPaymentBtn">تأكيد الدفع</button>
+    </div>
+  </div>
+</div>
+
+<!-- Suppliers List Modal (المشتروات > الموردين) -->
+<div class="modal-overlay hidden" id="suppliersModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2>🚚 الموردين والتجار</h2>
+      <button class="modal-close" data-close="suppliersModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="view-header-actions" style="margin-bottom:14px;">
+        <button class="btn-primary" id="addSupplierBtn">+ إضافة مورد</button>
+      </div>
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>اسم المورد</th>
+              <th>التليفون</th>
+              <th>مستحق عليه</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="suppliersTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add/Edit Supplier Modal -->
+<div class="modal-overlay hidden" id="supplierModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="supplierModalTitle">إضافة مورد</h2>
+      <button class="modal-close" data-close="supplierModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editSupplierId">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>اسم المورد / التاجر</label>
+        <input type="text" id="supName" placeholder="مثال: مصنع النور للأحذية">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>رقم التليفون (اختياري)</label>
+        <input type="text" id="supPhone" placeholder="01xxxxxxxxx">
+      </div>
+      <div class="form-field">
+        <label>ملاحظات (اختياري)</label>
+        <input type="text" id="supNotes" placeholder="أي تفاصيل إضافية">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="supplierModal">إلغاء</button>
+      <button class="btn-primary" id="saveSupplierBtn">حفظ المورد</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Purchase Modal -->
+<div class="modal-overlay hidden" id="purchaseModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>🚚 عملية شراء جديدة</h2>
+      <button class="modal-close" data-close="purchaseModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>المورد</label>
+        <select id="purchaseSupplierSelect"></select>
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>البيان (اختياري)</label>
+        <input type="text" id="purchaseNote" placeholder="مثال: توريد بضاعة شتوي">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>إجمالي قيمة الشراء</label>
+        <input type="number" id="purchaseAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-field">
+        <label>مدفوع دلوقتي (اختياري — سيب فارغ لو آجل بالكامل)</label>
+        <input type="number" id="purchaseDownPayment" min="0" step="0.01" value="0">
+      </div>
+      <div class="credit-remaining-line" id="purchaseRemainingPreview"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="purchaseModal">إلغاء</button>
+      <button class="btn-primary" id="confirmPurchaseBtn">تسجيل عملية الشراء</button>
+    </div>
+  </div>
+</div>
+
+<!-- Purchase Payment Modal (partial/installment payment to a supplier) -->
+<div class="modal-overlay hidden" id="purchasePaymentModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>💵 تسجيل دفعة لمورد</h2>
+      <button class="modal-close" data-close="purchasePaymentModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="shift-summary" id="purchasePaymentSummary"></div>
+      <div class="form-field" style="margin-top:14px;">
+        <label>المبلغ المدفوع دلوقتي</label>
+        <input type="number" id="purchasePaymentAmount" min="0" step="0.01">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="purchasePaymentModal">إلغاء</button>
+      <button class="btn-primary" id="confirmPurchasePaymentBtn">تأكيد الدفع</button>
+    </div>
+  </div>
+</div>
+
+<!-- Purchase Detail Modal (سجل الدفعات لعملية شراء) -->
+<div class="modal-overlay hidden" id="purchaseDetailModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="purchaseDetailTitle">🚚 تفاصيل عملية الشراء</h2>
+      <button class="modal-close" data-close="purchaseDetailModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="shift-summary" id="purchaseDetailSummary"></div>
+      <h3 class="customer-detail-subhead">سجل الدفعات</h3>
+      <div class="contact-search-summary hidden" id="purchaseDetailPaymentsEmpty"></div>
+      <div class="picker-options" id="purchaseDetailPayments"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Add/Edit Worker Modal -->
+<div class="modal-overlay hidden" id="workerModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="workerModalTitle">إضافة عامل</h2>
+      <button class="modal-close" data-close="workerModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editWorkerId">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>اسم العامل</label>
+        <input type="text" id="workerName" placeholder="مثال: محمد أحمد">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>الوظيفة</label>
+        <input type="text" id="workerJobTitle" placeholder="مثال: بائع">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>رقم التليفون (اختياري)</label>
+        <input type="text" id="workerPhone" placeholder="01xxxxxxxxx">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>المرتب الأساسي (شهري)</label>
+        <input type="number" id="workerSalary" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>رصيد الإجازات السنوي (يوم)</label>
+        <input type="number" id="workerVacationDays" min="0" step="1" value="21">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>تاريخ التعيين (اختياري)</label>
+        <input type="date" id="workerJoinDate">
+      </div>
+      <div class="form-field">
+        <label>ملاحظات (اختياري)</label>
+        <input type="text" id="workerNotes" placeholder="أي تفاصيل إضافية">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="workerModal">إلغاء</button>
+      <button class="btn-primary" id="saveWorkerBtn">حفظ بيانات العامل</button>
+    </div>
+  </div>
+</div>
+
+<!-- Worker Detail Modal (المرتب + السلف + المنح + المكافآت + الإجازات) -->
+<div class="modal-overlay hidden" id="workerDetailModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2 id="workerDetailName">👷 بيانات العامل</h2>
+      <button class="modal-close" data-close="workerDetailModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="customer-detail-contact" id="workerDetailContact"></div>
+      <div class="report-stats" id="workerDetailStats"></div>
+
+      <div class="view-header-actions" style="margin:14px 0;flex-wrap:wrap;gap:8px;">
+        <button class="btn-ghost" id="workerAddAdvanceBtn">💰 سلفة جديدة</button>
+        <button class="btn-ghost" id="workerAddGrantBtn">🎁 منحة</button>
+        <button class="btn-ghost" id="workerAddBonusBtn">🏅 مكافأة</button>
+        <button class="btn-ghost" id="workerAddVacationBtn">🌴 تسجيل إجازة</button>
+        <button class="btn-primary" id="workerSettlementBtn">🧮 تسوية المرتب</button>
+        <button class="btn-ghost" id="workerMonthlyLogBtn">📜 سجل بكل شهر</button>
+      </div>
+
+      <h3 class="customer-detail-subhead">سجل السلف والمنح والمكافآت</h3>
+      <div class="picker-options" id="workerDetailTxns"></div>
+
+      <h3 class="customer-detail-subhead">سجل الإجازات</h3>
+      <div class="credit-remaining-line" id="workerVacationSummary"></div>
+      <div class="picker-options" id="workerDetailVacations" style="margin-top:10px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="workerDetailModal">إغلاق</button>
+      <button class="btn-primary" id="workerDetailEditBtn">✏️ تعديل بيانات العامل</button>
+    </div>
+  </div>
+</div>
+
+<!-- Worker Transaction Modal (سلفة / منحة / مكافأة — shared) -->
+<div class="modal-overlay hidden" id="workerTxnModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="workerTxnTitle">💰 سلفة جديدة</h2>
+      <button class="modal-close" data-close="workerTxnModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>المبلغ</label>
+        <input type="number" id="workerTxnAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-field">
+        <label>ملاحظات (اختياري)</label>
+        <input type="text" id="workerTxnNote" placeholder="أي تفاصيل إضافية">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="workerTxnModal">إلغاء</button>
+      <button class="btn-primary" id="confirmWorkerTxnBtn">تأكيد</button>
+    </div>
+  </div>
+</div>
+
+<!-- Worker Vacation Modal -->
+<div class="modal-overlay hidden" id="workerVacationModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>🌴 تسجيل إجازة</h2>
+      <button class="modal-close" data-close="workerVacationModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="credit-remaining-line" id="workerVacationModalRemaining" style="margin-bottom:14px;"></div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>عدد أيام الإجازة</label>
+        <input type="number" id="workerVacationDaysInput" min="1" step="1" value="1">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>تاريخ بداية الإجازة</label>
+        <input type="date" id="workerVacationStartDate">
+      </div>
+      <div class="form-field">
+        <label>ملاحظات (اختياري)</label>
+        <input type="text" id="workerVacationNote" placeholder="أي تفاصيل إضافية">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="workerVacationModal">إلغاء</button>
+      <button class="btn-primary" id="confirmWorkerVacationBtn">تسجيل الإجازة</button>
+    </div>
+  </div>
+</div>
+
+<!-- Salary Settlement Modal (تسوية المرتب — يقفل حساب الشهر الحالي: مرتب + منح + مكافآت - سلف) -->
+<div class="modal-overlay hidden" id="salarySettlementModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="salarySettlementTitle">🧮 تسوية المرتب</h2>
+      <button class="modal-close" data-close="salarySettlementModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="shift-summary" id="salarySettlementSummary"></div>
+      <div class="credit-remaining-line" id="salarySettlementLastDate" style="margin-top:12px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="salarySettlementModal">إلغاء</button>
+      <button class="btn-primary" id="confirmSalarySettlementBtn">✅ تأكيد التسوية</button>
+    </div>
+  </div>
+</div>
+
+<!-- Worker Monthly Log — list of months (تسجيل تلقائي من تواريخ السلف/المنح/المكافآت/الإجازات) -->
+<div class="modal-overlay hidden" id="workerMonthlyLogModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="workerMonthlyLogTitle">📜 سجل الشهور</h2>
+      <button class="modal-close" data-close="workerMonthlyLogModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="picker-options" id="workerMonthlyLogList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Worker Month Detail — full breakdown of what happened with the worker in one month -->
+<div class="modal-overlay hidden" id="workerMonthDetailModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2 id="workerMonthDetailTitle">📅 تفاصيل الشهر</h2>
+      <button class="modal-close" data-close="workerMonthDetailModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="report-stats" id="workerMonthDetailStats"></div>
+
+      <h3 class="customer-detail-subhead">السلف والمنح والمكافآت في الشهر ده</h3>
+      <div class="picker-options" id="workerMonthDetailTxns"></div>
+
+      <h3 class="customer-detail-subhead">الإجازات في الشهر ده</h3>
+      <div class="picker-options" id="workerMonthDetailVacations"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" id="workerMonthDetailBackBtn">→ رجوع لسجل الشهور</button>
+    </div>
+  </div>
+</div>
+
+<!-- Low Stock Alert Modal -->
+<div class="modal-overlay hidden" id="lowStockModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2>⚠️ أصناف قربت تخلص من المخزون</h2>
+      <button class="modal-close" data-close="lowStockModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>الصنف</th>
+              <th>القسم</th>
+              <th>المقاس</th>
+              <th>اللون</th>
+              <th>الكمية المتبقية</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="lowStockTableBody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
