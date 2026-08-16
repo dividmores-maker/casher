@@ -482,6 +482,23 @@
           </table>
         </div>
       </div>
+
+      <div class="report-panel">
+        <h3>تفاصيل المصروفات — أنا صرفت إيه</h3>
+        <div class="orders-table-wrap">
+          <table class="inventory-table" id="expensesTable">
+            <thead>
+              <tr>
+                <th>التاريخ</th>
+                <th>النوع</th>
+                <th>البيان</th>
+                <th>المبلغ</th>
+              </tr>
+            </thead>
+            <tbody id="expensesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- SETTINGS VIEW -->
@@ -613,7 +630,7 @@
 
       <div class="variants-section">
         <div class="variants-head">
-          <label>المقاسات والألوان والكميات</label>
+          <label>المقاسات: لكل مقاس أضف الألوان وكميّة كل لون — كل لون بيتولّدله باركود خاص بيه للبحث في المبيعات</label>
           <button class="btn-ghost-sm" id="addVariantRow">+ إضافة مقاس</button>
         </div>
         <div class="variant-rows" id="variantRows"></div>
@@ -1152,6 +1169,15 @@
         <input type="number" id="purchaseDownPayment" min="0" step="0.01" value="0">
       </div>
       <div class="credit-remaining-line" id="purchaseRemainingPreview"></div>
+
+      <div class="variants-section" style="margin-top:14px;">
+        <div class="variants-head">
+          <label>تفاصيل الفاتورة (الأنواع والمقاسات والألوان وسعر كل نوع)</label>
+          <button type="button" class="btn-ghost-sm" id="addPurchaseItemRow">+ إضافة نوع</button>
+        </div>
+        <div class="variant-rows" id="purchaseItemRows"></div>
+        <div class="credit-remaining-line" id="purchaseItemsTotalPreview"></div>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn-ghost" data-close="purchaseModal">إلغاء</button>
@@ -1190,6 +1216,11 @@
     </div>
     <div class="modal-body">
       <div class="shift-summary" id="purchaseDetailSummary"></div>
+
+      <h3 class="customer-detail-subhead">تفاصيل الفاتورة</h3>
+      <div class="contact-search-summary hidden" id="purchaseDetailItemsEmpty"></div>
+      <div class="picker-options" id="purchaseDetailItems"></div>
+
       <h3 class="customer-detail-subhead">سجل الدفعات</h3>
       <div class="contact-search-summary hidden" id="purchaseDetailPaymentsEmpty"></div>
       <div class="picker-options" id="purchaseDetailPayments"></div>

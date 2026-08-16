@@ -200,25 +200,25 @@ function seedIfEmpty(){
   const demo = [
     { id: uid('p'), name:'حذاء رياضي كلاسيك', brand:'نايك', group:'men', category:'رياضي', sku:'SP-001', cost:450, price:699,
       variants:[
-        {id:uid('v'), size:'40', color:'أبيض', qty:5},
-        {id:uid('v'), size:'41', color:'أبيض', qty:3},
-        {id:uid('v'), size:'42', color:'أسود', qty:6},
+        {id:uid('v'), size:'40', color:'أبيض', qty:5, barcode:'1'},
+        {id:uid('v'), size:'41', color:'أبيض', qty:3, barcode:'2'},
+        {id:uid('v'), size:'42', color:'أسود', qty:6, barcode:'3'},
       ]},
     { id: uid('p'), name:'حذاء جلد كلاسيك', brand:'ماركة محلية', group:'men', category:'كلاسيك', sku:'CL-014', cost:380, price:590,
       variants:[
-        {id:uid('v'), size:'40', color:'بني', qty:2},
-        {id:uid('v'), size:'42', color:'أسود', qty:4},
+        {id:uid('v'), size:'40', color:'بني', qty:2, barcode:'4'},
+        {id:uid('v'), size:'42', color:'أسود', qty:4, barcode:'5'},
       ]},
     { id: uid('p'), name:'صندل حريمي صيفي', brand:'—', group:'women', category:'صندل', sku:'WM-220', cost:150, price:270,
       variants:[
-        {id:uid('v'), size:'37', color:'بيج', qty:1},
-        {id:uid('v'), size:'38', color:'بيج', qty:0},
-        {id:uid('v'), size:'39', color:'أحمر', qty:5},
+        {id:uid('v'), size:'37', color:'بيج', qty:1, barcode:'6'},
+        {id:uid('v'), size:'38', color:'بيج', qty:0, barcode:'7'},
+        {id:uid('v'), size:'39', color:'أحمر', qty:5, barcode:'8'},
       ]},
     { id: uid('p'), name:'حذاء أطفال رياضي', brand:'—', group:'kids', category:'رياضي', sku:'KD-090', cost:120, price:210,
       variants:[
-        {id:uid('v'), size:'28', color:'أزرق', qty:4},
-        {id:uid('v'), size:'30', color:'أحمر', qty:3},
+        {id:uid('v'), size:'28', color:'أزرق', qty:4, barcode:'9'},
+        {id:uid('v'), size:'30', color:'أحمر', qty:3, barcode:'10'},
       ]},
   ];
   DB.saveProducts(demo);
@@ -253,7 +253,8 @@ let state = {
   selectedColor: null,
   searchTerm: '',
   reportRange: 'today',
-  editVariantRows: [], // used while product modal open
+  editPurchaseItems: [], // used while purchase modal open
+  editSizeGroups: [], // used while product modal open
   editGroup: null,      // used while product modal open
   editUserRole: null,    // used while user modal open
   selectedCustomer: null,   // company attached to the current cart, if any
@@ -902,7 +903,26 @@ function handleBarcodeScan(raw){
   const code = raw.trim();
   if(!code) return;
 
-  const product = DB.getProducts().find(p => (p.sku||'').trim().toLowerCase() === code.toLowerCase());
+  // 1) Try an exact match on a variant's own barcode (size+color specific) —
+  //    this skips the picker entirely and adds straight to the cart.
+  const products = DB.getProducts();
+  for(const p of products){
+    const variant = p.variants.find(v => (v.barcode||'').trim().toLowerCase() === code.toLowerCase());
+    if(variant){
+      if(variant.qty <= 0){
+        barcodeFeedback.innerHTML = `<div class="barcode-msg error">⚠ «${escapeHtml(p.name)} — ${escapeHtml(variant.size)}${variant.color && variant.color!=='—' ? ' · '+escapeHtml(variant.color) : ''}» خلص من المخزون</div>`;
+        return;
+      }
+      barcodeFeedback.innerHTML = `<div class="barcode-msg success">✓ ${escapeHtml(p.name)} — مقاس ${escapeHtml(variant.size)}${variant.color && variant.color!=='—' ? ' · '+escapeHtml(variant.color) : ''} اتضاف للفاتورة</div>`;
+      addToCart(p, variant);
+      setTimeout(()=>closeModal('barcodeModal'), 400);
+      return;
+    }
+  }
+
+  // 2) Fall back to the general product code (SKU) — lets the user pick
+  //    the size/color afterwards, same as before.
+  const product = products.find(p => (p.sku||'').trim().toLowerCase() === code.toLowerCase());
 
   if(!product){
     barcodeFeedback.innerHTML = `<div class="barcode-msg error">✕ مفيش صنف بالكود «${escapeHtml(code)}»</div>`;
@@ -1895,6 +1915,16 @@ function supplierDebtRemaining(supplierId){
     .filter(p=>p.supplierId===supplierId && !purchaseIsSettled(p))
     .reduce((s,p)=>s+purchaseRemaining(p), 0);
 }
+/* Builds a short human-readable summary of a purchase's line items,
+   e.g. "حذاء رياضي×3، صندل حريمي×2" — used so expense-report entries
+   show what was actually bought, not just the supplier name. */
+function purchaseItemsSummary(items){
+  if(!items || !items.length) return '';
+  const parts = items.map(it=>`${it.type}${it.qty?'×'+it.qty:''}`);
+  const summary = parts.join('، ');
+  return summary.length > 90 ? summary.slice(0,87)+'…' : summary;
+}
+
 /* Logs a payment toward a purchase as a supplier expense, so it counts
    in shift cash and shows in المصاريف/التقارير automatically. */
 function logSupplierExpense(amount, supplierName, note){
@@ -2090,8 +2120,63 @@ document.getElementById('addPurchaseBtn').addEventListener('click', ()=>{
   document.getElementById('purchaseNote').value = '';
   document.getElementById('purchaseAmount').value = '';
   document.getElementById('purchaseDownPayment').value = 0;
+  state.editPurchaseItems = [];
+  renderPurchaseItemRows();
   updatePurchasePreview();
   openModal('purchaseModal');
+});
+
+/* ---- Purchase invoice line items (النوع / اللون / الكمية / السعر) ---- */
+function renderPurchaseItemRows(){
+  const wrap = document.getElementById('purchaseItemRows');
+  wrap.innerHTML = '';
+  state.editPurchaseItems.forEach((it,idx)=>{
+    const row = document.createElement('div');
+    row.className = 'purchase-item-row';
+    row.innerHTML = `
+      <div class="purchase-item-row-main">
+        <input type="text" placeholder="النوع (مثال حذاء رياضي)" value="${escapeHtml(it.type)}" data-f="type">
+        <button class="variant-remove" title="حذف">✕</button>
+      </div>
+      <div class="purchase-item-row-fields">
+        <input type="text" class="mono-input" placeholder="المقاس" value="${escapeHtml(it.size)}" data-f="size">
+        <input type="text" placeholder="اللون" value="${escapeHtml(it.color)}" data-f="color">
+        <input type="number" min="0" class="mono-input" placeholder="الكمية" value="${it.qty}" data-f="qty">
+        <input type="number" min="0" step="0.01" class="mono-input" placeholder="السعر" value="${it.price}" data-f="price">
+      </div>`;
+    row.querySelector('[data-f="type"]').oninput = e=>{ it.type=e.target.value; };
+    row.querySelector('[data-f="size"]').oninput = e=>{ it.size=e.target.value; };
+    row.querySelector('[data-f="color"]').oninput = e=>{ it.color=e.target.value; };
+    row.querySelector('[data-f="qty"]').oninput = e=>{ it.qty=Number(e.target.value)||0; updatePurchaseItemsTotal(); };
+    row.querySelector('[data-f="price"]').oninput = e=>{ it.price=Number(e.target.value)||0; updatePurchaseItemsTotal(); };
+    row.querySelector('.variant-remove').onclick = ()=>{
+      state.editPurchaseItems.splice(idx,1);
+      renderPurchaseItemRows();
+    };
+    wrap.appendChild(row);
+  });
+  updatePurchaseItemsTotal();
+}
+
+function updatePurchaseItemsTotal(){
+  const total = state.editPurchaseItems.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.price)||0), 0);
+  const preview = document.getElementById('purchaseItemsTotalPreview');
+  if(!state.editPurchaseItems.length){
+    preview.innerHTML = '';
+    return;
+  }
+  preview.innerHTML = `إجمالي تفاصيل الفاتورة: <strong>${money(total)}</strong> ج.م
+    <button type="button" class="btn-ghost-sm" id="usePurchaseItemsTotalBtn" style="margin-inline-start:8px;">استخدمه كإجمالي الفاتورة</button>`;
+  const btn = document.getElementById('usePurchaseItemsTotalBtn');
+  if(btn) btn.onclick = ()=>{
+    document.getElementById('purchaseAmount').value = total.toFixed(2);
+    updatePurchasePreview();
+  };
+}
+
+document.getElementById('addPurchaseItemRow').addEventListener('click', ()=>{
+  state.editPurchaseItems.push({id:uid('pit'), type:'', size:'', color:'', qty:1, price:0});
+  renderPurchaseItemRows();
 });
 
 document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
@@ -2103,6 +2188,10 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
   const note = document.getElementById('purchaseNote').value.trim();
   const down = Math.min(amount, Math.max(0, Number(document.getElementById('purchaseDownPayment').value) || 0));
 
+  const items = state.editPurchaseItems
+    .filter(it=>it.type.trim()!=='')
+    .map(it=>({id:it.id||uid('pit'), type:it.type.trim(), size:it.size.trim()||'—', color:it.color.trim()||'—', qty:Math.max(0,it.qty||0), price:Math.max(0,it.price||0)}));
+
   const cashier = AUTH.currentUser();
   const activeShift = getActiveShift();
   const purchase = {
@@ -2111,7 +2200,7 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
     supplierId: supplier.id,
     supplierName: supplier.name,
     supplierPhone: supplier.phone || '',
-    amount, note,
+    amount, note, items,
     payments: [],
     createdBy: cashier?.id || null,
     createdByName: cashier?.name || ''
@@ -2122,7 +2211,8 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
       shiftId: activeShift ? activeShift.id : null,
       byId: cashier?.id || null, byName: cashier?.name || ''
     });
-    logSupplierExpense(down, supplier.name, note || 'دفعة شراء');
+    const itemsSummary = purchaseItemsSummary(items);
+    logSupplierExpense(down, supplier.name, [note, itemsSummary].filter(Boolean).join(' — ') || 'دفعة شراء');
   }
   const list = DB.getPurchases();
   list.push(purchase);
@@ -2171,7 +2261,8 @@ document.getElementById('confirmPurchasePaymentBtn').addEventListener('click', (
     byId: cashier?.id || null, byName: cashier?.name || ''
   });
   DB.savePurchases(list);
-  logSupplierExpense(amount, purchase.supplierName, purchase.note || 'دفعة تقسيط');
+  const itemsSummary = purchaseItemsSummary(purchase.items);
+  logSupplierExpense(amount, purchase.supplierName, [purchase.note, itemsSummary].filter(Boolean).join(' — ') || 'دفعة تقسيط');
   closeModal('purchasePaymentModal');
   showToast(purchaseIsSettled(purchase) ? 'تم سداد المستحق للمورد بالكامل ✓' : 'تم تسجيل الدفعة');
   renderPurchasesView();
@@ -2192,17 +2283,35 @@ function openPurchaseDetailModal(purchaseId){
     <div class="sum-row"><span>المدفوع</span><span class="mono">${money(paid)}</span></div>
     <div class="sum-row total-row"><span>المتبقي</span><span class="mono">${money(remaining)}</span></div>`;
 
-  const wrap = document.getElementById('purchaseDetailPayments');
+  const wrap = document.getElementById('purchaseDetailItems');
+  const itemsEmpty = document.getElementById('purchaseDetailItemsEmpty');
+  const items = purchase.items || [];
+  if(!items.length){
+    wrap.innerHTML = '';
+    itemsEmpty.classList.remove('hidden');
+    itemsEmpty.textContent = 'مفيش تفاصيل فاتورة مسجلة لعملية الشراء دي';
+  } else {
+    itemsEmpty.classList.add('hidden');
+    wrap.innerHTML = '';
+    items.forEach(it=>{
+      const row = document.createElement('div');
+      row.className = 'contact-chip';
+      row.innerHTML = `<span>${escapeHtml(it.type)}${it.size && it.size!=='—' ? ' — مقاس '+escapeHtml(it.size) : ''}${it.color && it.color!=='—' ? ' · '+escapeHtml(it.color) : ''} × ${it.qty}</span><span class="mono">${money(it.qty*it.price)} ج.م</span>`;
+      wrap.appendChild(row);
+    });
+  }
+
+  const paymentsWrap = document.getElementById('purchaseDetailPayments');
   const payments = purchase.payments || [];
   if(!payments.length){
-    wrap.innerHTML = '<div class="empty-note">لسه مفيش دفعات مسجلة</div>';
+    paymentsWrap.innerHTML = '<div class="empty-note">لسه مفيش دفعات مسجلة</div>';
   } else {
-    wrap.innerHTML = '';
+    paymentsWrap.innerHTML = '';
     [...payments].reverse().forEach(pay=>{
       const row = document.createElement('div');
       row.className = 'contact-chip';
       row.innerHTML = `<span>💵 ${money(pay.amount)} ج.م</span><span class="mono">${new Date(pay.date).toLocaleDateString('ar-EG')}</span>`;
-      wrap.appendChild(row);
+      paymentsWrap.appendChild(row);
     });
   }
   openModal('purchaseDetailModal');
@@ -2788,7 +2897,7 @@ function renderInventory(){
     if(stock>0 && stock<=3) lowStock++;
 
     const sizeTags = p.variants.map(v=>
-      `<span class="size-tag ${v.qty<=2?'low':''}">${escapeHtml(v.size)}${v.color?'·'+escapeHtml(v.color):''}: ${v.qty}</span>`
+      `<span class="size-tag ${v.qty<=2?'low':''}" title="باركود: ${escapeHtml(v.barcode||'—')}">${escapeHtml(v.size)}${v.color?'·'+escapeHtml(v.color):''}: ${v.qty}</span>`
     ).join('');
 
     const g = groupInfo(p.group);
@@ -2865,7 +2974,21 @@ function handleRestockScan(raw){
   const code = raw.trim();
   if(!code) return;
 
-  const product = DB.getProducts().find(p => (p.sku||'').trim().toLowerCase() === code.toLowerCase());
+  const products = DB.getProducts();
+
+  // 1) Try a variant-level barcode match first — jumps straight to that
+  //    size/color row.
+  for(const p of products){
+    const variant = p.variants.find(v => (v.barcode||'').trim().toLowerCase() === code.toLowerCase());
+    if(variant){
+      restockFeedback.innerHTML = '';
+      renderRestockResult(p.id, variant.id);
+      return;
+    }
+  }
+
+  // 2) Fall back to the general product code (SKU).
+  const product = products.find(p => (p.sku||'').trim().toLowerCase() === code.toLowerCase());
 
   if(!product){
     restockResult.classList.add('hidden');
@@ -2877,7 +3000,7 @@ function handleRestockScan(raw){
   renderRestockResult(product.id);
 }
 
-function renderRestockResult(productId){
+function renderRestockResult(productId, highlightVariantId){
   const product = DB.getProducts().find(p=>p.id===productId);
   if(!product){ restockResult.classList.add('hidden'); return; }
 
@@ -2896,7 +3019,7 @@ function renderRestockResult(productId){
 
   product.variants.forEach(v=>{
     const row = document.createElement('div');
-    row.className = 'restock-variant-row';
+    row.className = 'restock-variant-row' + (highlightVariantId && v.id===highlightVariantId ? ' matched-scan' : '');
     row.innerHTML = `
       <span class="restock-variant-label">${escapeHtml(v.size)}${v.color && v.color!=='—' ? ' · '+escapeHtml(v.color) : ''}</span>
       <span class="restock-variant-qty">الحالي: ${v.qty}</span>
@@ -2918,6 +3041,9 @@ function renderRestockResult(productId){
       setTimeout(()=>restockInput.focus(), 30);
     };
     wrap.appendChild(row);
+    if(highlightVariantId && v.id===highlightVariantId){
+      setTimeout(()=>{ row.scrollIntoView({block:'nearest'}); row.querySelector('input').focus(); row.querySelector('input').select(); }, 30);
+    }
   });
 }
 
@@ -2946,7 +3072,7 @@ function openProductModal(product){
   document.getElementById('fCost').value = product?.cost || '';
   document.getElementById('fPrice').value = product?.price || '';
 
-  state.editVariantRows = product ? product.variants.map(v=>({...v})) : [{id:uid('v'), size:'', color:'', qty:0}];
+  state.editSizeGroups = product ? groupVariantsBySizeForEdit(product.variants) : [{id:uid('sg'), size:'', colors:[{id:uid('v'), color:'', qty:0, barcode:''}]}];
   renderVariantRows();
   openModal('productModal');
 }
@@ -3041,32 +3167,111 @@ function printBarcodeLabels(name, price, code){
   win.document.close();
 }
 
+function groupVariantsBySizeForEdit(variants){
+  const groups = [];
+  const bySize = new Map();
+  (variants||[]).forEach(v=>{
+    let g = bySize.get(v.size);
+    if(!g){
+      g = {id:uid('sg'), size:v.size, colors:[]};
+      bySize.set(v.size, g);
+      groups.push(g);
+    }
+    g.colors.push({id:v.id||uid('v'), color:v.color==='—'?'':v.color, qty:v.qty, barcode:v.barcode||''});
+  });
+  return groups;
+}
+
 function renderVariantRows(){
   const wrap = document.getElementById('variantRows');
   wrap.innerHTML = '';
-  state.editVariantRows.forEach((v,idx)=>{
-    const row = document.createElement('div');
-    row.className = 'variant-row';
-    row.innerHTML = `
-      <input type="text" placeholder="المقاس (مثال 42)" value="${escapeHtml(v.size)}" data-f="size">
-      <input type="text" placeholder="اللون" value="${escapeHtml(v.color)}" data-f="color">
-      <input type="number" min="0" class="mono-input" placeholder="الكمية" value="${v.qty}" data-f="qty">
-      <button class="variant-remove" title="حذف">✕</button>`;
-    row.querySelector('[data-f="size"]').oninput = e=>v.size=e.target.value;
-    row.querySelector('[data-f="color"]').oninput = e=>v.color=e.target.value;
-    row.querySelector('[data-f="qty"]').oninput = e=>v.qty=Number(e.target.value)||0;
-    row.querySelector('.variant-remove').onclick = ()=>{
-      state.editVariantRows.splice(idx,1);
+  state.editSizeGroups.forEach((g,gIdx)=>{
+    const group = document.createElement('div');
+    group.className = 'size-group';
+
+    const head = document.createElement('div');
+    head.className = 'size-group-head';
+    head.innerHTML = `
+      <input type="text" placeholder="المقاس (مثال 42)" value="${escapeHtml(g.size)}" data-f="size">
+      <button class="variant-remove" title="حذف المقاس ده وكل ألوانه">✕</button>`;
+    head.querySelector('[data-f="size"]').oninput = e=>g.size=e.target.value;
+    head.querySelector('.variant-remove').onclick = ()=>{
+      state.editSizeGroups.splice(gIdx,1);
       renderVariantRows();
     };
-    wrap.appendChild(row);
+    group.appendChild(head);
+
+    const colorRows = document.createElement('div');
+    colorRows.className = 'color-rows';
+    g.colors.forEach((c,cIdx)=>{
+      if(!c.barcode) c.barcode = generateUniqueVariantBarcode();
+      const row = document.createElement('div');
+      row.className = 'color-row';
+      row.innerHTML = `
+        <div class="color-row-main">
+          <input type="text" placeholder="اللون (مثال أحمر)" value="${escapeHtml(c.color)}" data-f="color">
+          <input type="number" min="0" class="mono-input" placeholder="الكمية" value="${c.qty}" data-f="qty">
+          <button class="variant-remove" title="حذف اللون ده">✕</button>
+        </div>
+        <div class="variant-row-barcode">
+          <input type="text" class="mono-input" placeholder="باركود اللون ده" value="${escapeHtml(c.barcode||'')}" data-f="barcode">
+          <button type="button" class="btn-ghost-sm" data-act="gen-variant-barcode" title="توليد باركود جديد">🎲</button>
+          <button type="button" class="btn-ghost-sm" data-act="print-variant-barcode" title="طباعة الباركود">🖨️</button>
+        </div>`;
+      row.querySelector('[data-f="color"]').oninput = e=>c.color=e.target.value;
+      row.querySelector('[data-f="qty"]').oninput = e=>c.qty=Number(e.target.value)||0;
+      row.querySelector('[data-f="barcode"]').oninput = e=>c.barcode=e.target.value;
+      row.querySelector('.variant-remove').onclick = ()=>{
+        g.colors.splice(cIdx,1);
+        renderVariantRows();
+      };
+      row.querySelector('[data-act="gen-variant-barcode"]').onclick = ()=>{
+        c.barcode = generateUniqueVariantBarcode();
+        renderVariantRows();
+      };
+      row.querySelector('[data-act="print-variant-barcode"]').onclick = ()=>{
+        if(!c.barcode){ showToast('محتاج تولّد باركود للون ده الأول'); return; }
+        const baseName = document.getElementById('fName').value.trim() || 'صنف';
+        const label = baseName + (g.size?' — مقاس '+g.size:'') + (c.color ? ' — '+c.color : '');
+        const price = Number(document.getElementById('fPrice').value)||0;
+        printBarcodeLabels(label, price, c.barcode);
+      };
+      colorRows.appendChild(row);
+    });
+    group.appendChild(colorRows);
+
+    const addColorBtn = document.createElement('button');
+    addColorBtn.type = 'button';
+    addColorBtn.className = 'btn-ghost-sm add-color-btn';
+    addColorBtn.textContent = '+ إضافة لون لنفس المقاس';
+    addColorBtn.onclick = ()=>{
+      g.colors.push({id:uid('v'), color:'', qty:0, barcode:generateUniqueVariantBarcode()});
+      renderVariantRows();
+    };
+    group.appendChild(addColorBtn);
+
+    wrap.appendChild(group);
   });
 }
 
 document.getElementById('addVariantRow').addEventListener('click', ()=>{
-  state.editVariantRows.push({id:uid('v'), size:'', color:'', qty:0});
+  state.editSizeGroups.push({id:uid('sg'), size:'', colors:[{id:uid('v'), color:'', qty:0, barcode:generateUniqueVariantBarcode()}]});
   renderVariantRows();
 });
+
+/* Unique barcode for a size/color variant — separate pool from product SKUs,
+   used for direct barcode search in the sales page. Sequential (1, 2, 3, ...)
+   so it's easy to read/type/search, not a long random/timestamp code. */
+function generateUniqueVariantBarcode(){
+  let maxNum = 0;
+  const scan = v=>{
+    const raw = (v.barcode||'').trim();
+    if(raw && /^\d+$/.test(raw)) maxNum = Math.max(maxNum, parseInt(raw,10));
+  };
+  DB.getProducts().forEach(p=>p.variants.forEach(scan));
+  (state.editSizeGroups||[]).forEach(g=>g.colors.forEach(scan));
+  return String(maxNum + 1);
+}
 
 document.getElementById('saveProductBtn').addEventListener('click', ()=>{
   const name = document.getElementById('fName').value.trim();
@@ -3075,9 +3280,17 @@ document.getElementById('saveProductBtn').addEventListener('click', ()=>{
   const price = Number(document.getElementById('fPrice').value)||0;
   const cost = Number(document.getElementById('fCost').value)||0;
 
-  const variants = state.editVariantRows
-    .filter(v=>v.size.trim()!=='')
-    .map(v=>({id:v.id||uid('v'), size:v.size.trim(), color:v.color.trim()||'—', qty:Math.max(0,v.qty||0)}));
+  const variants = [];
+  state.editSizeGroups.forEach(g=>{
+    const size = g.size.trim();
+    if(!size) return;
+    g.colors.forEach(c=>{
+      variants.push({
+        id:c.id||uid('v'), size, color:c.color.trim()||'—', qty:Math.max(0,c.qty||0),
+        barcode:(c.barcode||'').trim() || generateUniqueVariantBarcode()
+      });
+    });
+  });
 
   const editId = document.getElementById('editProductId').value;
   const products = DB.getProducts();
@@ -3156,6 +3369,32 @@ function renderReports(){
   renderDailyChart(orders);
   renderTopProducts(orders);
   renderOrdersTable(orders);
+  renderExpensesTable();
+}
+
+const EXPENSE_CATEGORY_LABELS = {
+  suppliers: '🚚 موردين', workers: '👷 عمال', rent: '🏠 إيجار', bills: '💡 فواتير',
+  maintenance: '🔧 صيانة', marketing: '📣 تسويق', other: '📦 أخرى'
+};
+
+function renderExpensesTable(){
+  const tbody = document.getElementById('expensesTableBody');
+  const expenses = [...expensesForReportRange()].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  if(!expenses.length){
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-note">مفيش مصروفات في الفترة دي</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  expenses.forEach(e=>{
+    const tr = document.createElement('tr');
+    const catLabel = EXPENSE_CATEGORY_LABELS[e.category] || e.category || '—';
+    tr.innerHTML = `
+      <td class="mono">${new Date(e.date).toLocaleDateString('ar-EG')}</td>
+      <td>${escapeHtml(catLabel)}</td>
+      <td>${escapeHtml(e.note||'—')}</td>
+      <td class="mono">${money(e.amount)}</td>`;
+    tbody.appendChild(tr);
+  });
 }
 
 function renderDailyChart(orders){
