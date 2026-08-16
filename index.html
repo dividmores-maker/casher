@@ -8,7 +8,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Orbitron:wght@600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js"
+  onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';s.onerror=function(){var s2=document.createElement('script');s2.src='https://unpkg.com/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';document.head.appendChild(s2);};document.head.appendChild(s);"></script>
 </head>
 <body>
 
@@ -281,6 +282,7 @@
         <h1>المشتروات</h1>
         <div class="view-header-actions">
           <button class="btn-ghost" id="manageSuppliersBtn">🚚 الموردين</button>
+          <button class="btn-ghost" id="supplierLedgerBtn">📋 سجل الموردين</button>
           <button class="btn-primary" id="addPurchaseBtn">+ عملية شراء جديدة</button>
         </div>
       </div>
@@ -1224,6 +1226,61 @@
       <h3 class="customer-detail-subhead">سجل الدفعات</h3>
       <div class="contact-search-summary hidden" id="purchaseDetailPaymentsEmpty"></div>
       <div class="picker-options" id="purchaseDetailPayments"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Supplier Ledger Modal (سجل الموردين — كل فواتير مورد معيّن) -->
+<div class="modal-overlay hidden" id="supplierLedgerModal">
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <h2>📋 سجل الموردين</h2>
+      <button class="modal-close" data-close="supplierLedgerModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>اختار المورد</label>
+        <select id="supplierLedgerSelect"></select>
+      </div>
+
+      <div id="supplierLedgerContent">
+        <div class="report-stats">
+          <div class="stat-card">
+            <div class="stat-label">عدد الفواتير</div>
+            <div class="stat-value mono" id="supplierLedgerCount">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">إجمالي قيمة الفواتير</div>
+            <div class="stat-value mono" id="supplierLedgerTotal">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">إجمالي المدفوع</div>
+            <div class="stat-value mono" id="supplierLedgerPaid">0</div>
+          </div>
+          <div class="stat-card warn">
+            <div class="stat-label">إجمالي المتبقي عليه</div>
+            <div class="stat-value mono" id="supplierLedgerRemaining">0</div>
+          </div>
+        </div>
+
+        <div class="inventory-table-wrap">
+          <table class="inventory-table">
+            <thead>
+              <tr>
+                <th>التاريخ</th>
+                <th>البيان / الأصناف</th>
+                <th>الإجمالي</th>
+                <th>المدفوع</th>
+                <th>المتبقي</th>
+                <th>الحالة</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="supplierLedgerTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="empty-note hidden" id="supplierLedgerEmpty">لا يوجد موردين مسجلين لسه — ضيف مورد الأول</div>
     </div>
   </div>
 </div>

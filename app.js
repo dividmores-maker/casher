@@ -200,25 +200,25 @@ function seedIfEmpty(){
   const demo = [
     { id: uid('p'), name:'حذاء رياضي كلاسيك', brand:'نايك', group:'men', category:'رياضي', sku:'SP-001', cost:450, price:699,
       variants:[
-        {id:uid('v'), size:'40', color:'أبيض', qty:5, barcode:'1'},
-        {id:uid('v'), size:'41', color:'أبيض', qty:3, barcode:'2'},
-        {id:uid('v'), size:'42', color:'أسود', qty:6, barcode:'3'},
+        {id:uid('v'), size:'40', color:'أبيض', qty:5},
+        {id:uid('v'), size:'41', color:'أبيض', qty:3},
+        {id:uid('v'), size:'42', color:'أسود', qty:6},
       ]},
     { id: uid('p'), name:'حذاء جلد كلاسيك', brand:'ماركة محلية', group:'men', category:'كلاسيك', sku:'CL-014', cost:380, price:590,
       variants:[
-        {id:uid('v'), size:'40', color:'بني', qty:2, barcode:'4'},
-        {id:uid('v'), size:'42', color:'أسود', qty:4, barcode:'5'},
+        {id:uid('v'), size:'40', color:'بني', qty:2},
+        {id:uid('v'), size:'42', color:'أسود', qty:4},
       ]},
     { id: uid('p'), name:'صندل حريمي صيفي', brand:'—', group:'women', category:'صندل', sku:'WM-220', cost:150, price:270,
       variants:[
-        {id:uid('v'), size:'37', color:'بيج', qty:1, barcode:'6'},
-        {id:uid('v'), size:'38', color:'بيج', qty:0, barcode:'7'},
-        {id:uid('v'), size:'39', color:'أحمر', qty:5, barcode:'8'},
+        {id:uid('v'), size:'37', color:'بيج', qty:1},
+        {id:uid('v'), size:'38', color:'بيج', qty:0},
+        {id:uid('v'), size:'39', color:'أحمر', qty:5},
       ]},
     { id: uid('p'), name:'حذاء أطفال رياضي', brand:'—', group:'kids', category:'رياضي', sku:'KD-090', cost:120, price:210,
       variants:[
-        {id:uid('v'), size:'28', color:'أزرق', qty:4, barcode:'9'},
-        {id:uid('v'), size:'30', color:'أحمر', qty:3, barcode:'10'},
+        {id:uid('v'), size:'28', color:'أزرق', qty:4},
+        {id:uid('v'), size:'30', color:'أحمر', qty:3},
       ]},
   ];
   DB.saveProducts(demo);
@@ -903,25 +903,9 @@ function handleBarcodeScan(raw){
   const code = raw.trim();
   if(!code) return;
 
-  // 1) Try an exact match on a variant's own barcode (size+color specific) —
-  //    this skips the picker entirely and adds straight to the cart.
+  // Barcode is per-item (product), not per size/color — match the product's
+  // own code, then let the user pick the size/color from the picker.
   const products = DB.getProducts();
-  for(const p of products){
-    const variant = p.variants.find(v => (v.barcode||'').trim().toLowerCase() === code.toLowerCase());
-    if(variant){
-      if(variant.qty <= 0){
-        barcodeFeedback.innerHTML = `<div class="barcode-msg error">⚠ «${escapeHtml(p.name)} — ${escapeHtml(variant.size)}${variant.color && variant.color!=='—' ? ' · '+escapeHtml(variant.color) : ''}» خلص من المخزون</div>`;
-        return;
-      }
-      barcodeFeedback.innerHTML = `<div class="barcode-msg success">✓ ${escapeHtml(p.name)} — مقاس ${escapeHtml(variant.size)}${variant.color && variant.color!=='—' ? ' · '+escapeHtml(variant.color) : ''} اتضاف للفاتورة</div>`;
-      addToCart(p, variant);
-      setTimeout(()=>closeModal('barcodeModal'), 400);
-      return;
-    }
-  }
-
-  // 2) Fall back to the general product code (SKU) — lets the user pick
-  //    the size/color afterwards, same as before.
   const product = products.find(p => (p.sku||'').trim().toLowerCase() === code.toLowerCase());
 
   if(!product){
@@ -2093,6 +2077,74 @@ function deleteSupplier(id){
   showToast('تم حذف المورد');
 }
 
+/* ---- Supplier ledger (سجل الموردين) — pick a supplier and see every
+   invoice bought from them: what was bought, how much, how much paid,
+   how much still owed, plus totals across all their invoices. */
+document.getElementById('supplierLedgerBtn').addEventListener('click', ()=>{
+  populateSupplierLedgerSelect();
+  openModal('supplierLedgerModal');
+});
+
+function populateSupplierLedgerSelect(){
+  const select = document.getElementById('supplierLedgerSelect');
+  const suppliers = DB.getSuppliers();
+  const content = document.getElementById('supplierLedgerContent');
+  const empty = document.getElementById('supplierLedgerEmpty');
+  if(!suppliers.length){
+    select.innerHTML = '';
+    content.classList.add('hidden');
+    empty.classList.remove('hidden');
+    return;
+  }
+  content.classList.remove('hidden');
+  empty.classList.add('hidden');
+  const prev = select.value;
+  select.innerHTML = suppliers.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  select.value = suppliers.some(s=>s.id===prev) ? prev : suppliers[0].id;
+  renderSupplierLedger(select.value);
+}
+
+document.getElementById('supplierLedgerSelect').addEventListener('change', e=>{
+  renderSupplierLedger(e.target.value);
+});
+
+function renderSupplierLedger(supplierId){
+  const purchases = DB.getPurchases().filter(p=>p.supplierId===supplierId);
+  const tbody = document.getElementById('supplierLedgerTableBody');
+
+  let totalAmount = 0, totalPaid = 0, totalRemaining = 0;
+  if(!purchases.length){
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-note">مفيش فواتير مسجلة لهذا المورد</td></tr>';
+  } else {
+    tbody.innerHTML = '';
+    [...purchases].reverse().forEach(p=>{
+      const paid = purchasePaidTotal(p);
+      const remaining = purchaseRemaining(p);
+      const settled = purchaseIsSettled(p);
+      totalAmount += p.amount;
+      totalPaid += paid;
+      totalRemaining += remaining;
+      const itemsSummary = purchaseItemsSummary(p.items) || p.note || '—';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono">${new Date(p.date).toLocaleDateString('ar-EG')}</td>
+        <td>${escapeHtml(itemsSummary)}</td>
+        <td class="mono">${money(p.amount)}</td>
+        <td class="mono">${money(paid)}</td>
+        <td class="mono">${money(remaining)}</td>
+        <td><span class="credit-status ${settled?'settled':'open'}">${settled?'✓ اتسدد':'مستحق'}</span></td>
+        <td><button class="icon-btn" title="عرض التفاصيل">👁️</button></td>`;
+      tr.querySelector('.icon-btn').onclick = ()=>openPurchaseDetailModal(p.id);
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById('supplierLedgerCount').textContent = purchases.length;
+  document.getElementById('supplierLedgerTotal').textContent = money(totalAmount);
+  document.getElementById('supplierLedgerPaid').textContent = money(totalPaid);
+  document.getElementById('supplierLedgerRemaining').textContent = money(totalRemaining);
+}
+
 /* ---- New purchase ---- */
 function populatePurchaseSupplierSelect(){
   const select = document.getElementById('purchaseSupplierSelect');
@@ -2897,7 +2949,7 @@ function renderInventory(){
     if(stock>0 && stock<=3) lowStock++;
 
     const sizeTags = p.variants.map(v=>
-      `<span class="size-tag ${v.qty<=2?'low':''}" title="باركود: ${escapeHtml(v.barcode||'—')}">${escapeHtml(v.size)}${v.color?'·'+escapeHtml(v.color):''}: ${v.qty}</span>`
+      `<span class="size-tag ${v.qty<=2?'low':''}">${escapeHtml(v.size)}${v.color?'·'+escapeHtml(v.color):''}: ${v.qty}</span>`
     ).join('');
 
     const g = groupInfo(p.group);
@@ -2976,18 +3028,8 @@ function handleRestockScan(raw){
 
   const products = DB.getProducts();
 
-  // 1) Try a variant-level barcode match first — jumps straight to that
-  //    size/color row.
-  for(const p of products){
-    const variant = p.variants.find(v => (v.barcode||'').trim().toLowerCase() === code.toLowerCase());
-    if(variant){
-      restockFeedback.innerHTML = '';
-      renderRestockResult(p.id, variant.id);
-      return;
-    }
-  }
-
-  // 2) Fall back to the general product code (SKU).
+  // Barcode is per-item (product), not per size/color — match the product's
+  // own code, then show all its size/color rows to restock from.
   const product = products.find(p => (p.sku||'').trim().toLowerCase() === code.toLowerCase());
 
   if(!product){
@@ -3072,7 +3114,7 @@ function openProductModal(product){
   document.getElementById('fCost').value = product?.cost || '';
   document.getElementById('fPrice').value = product?.price || '';
 
-  state.editSizeGroups = product ? groupVariantsBySizeForEdit(product.variants) : [{id:uid('sg'), size:'', colors:[{id:uid('v'), color:'', qty:0, barcode:''}]}];
+  state.editSizeGroups = product ? groupVariantsBySizeForEdit(product.variants) : [{id:uid('sg'), size:'', colors:[{id:uid('v'), color:'', qty:0}]}];
   renderVariantRows();
   openModal('productModal');
 }
@@ -3103,7 +3145,10 @@ function renderSkuBarcodePreview(value){
 }
 
 const fSkuInput = document.getElementById('fSku');
-fSkuInput.addEventListener('input', ()=>renderSkuBarcodePreview(fSkuInput.value));
+fSkuInput.addEventListener('input', ()=>{
+  fSkuInput.value = normalizeBarcodeCode(fSkuInput.value);
+  renderSkuBarcodePreview(fSkuInput.value);
+});
 
 document.getElementById('generateSkuBtn').addEventListener('click', ()=>{
   fSkuInput.value = generateUniqueBarcodeCode();
@@ -3119,29 +3164,61 @@ document.getElementById('printSkuBtn').addEventListener('click', ()=>{
 });
 
 function printBarcodeLabels(name, price, code){
+  if(typeof JsBarcode === 'undefined'){
+    showToast('مكتبة الباركود لسه بتتحمّل أو مقفولة على النت عندك — استنى شوية وجرّب تاني');
+    return;
+  }
   const copiesRaw = prompt('كام ملصق عايز تطبع؟', '1');
   if(copiesRaw===null) return;
   const copies = Math.max(1, Math.min(200, Number(copiesRaw)||1));
+  const label = buildBarcodeLabelHtml(name, price, code);
+  if(!label){ showToast('الكود ده مش صالح لطباعة باركود'); return; }
+  openBarcodePrintWindow(label.repeat(copies));
+}
 
+/* Converts Arabic-Indic / Extended Arabic-Indic digits (٠١٢٣.. and ۰۱۲۳..)
+   to plain ASCII digits, and strips anything CODE128 can't encode.
+   Barcode fields are free-text inputs, so someone typing on an Arabic
+   keyboard can end up with Arabic-Indic digits that look identical to
+   normal numbers on screen but aren't valid CODE128 characters. */
+function normalizeBarcodeCode(raw){
+  const arabicIndic = '٠١٢٣٤٥٦٧٨٩';
+  const extArabicIndic = '۰۱۲۳۴۵۶۷۸۹';
+  let out = String(raw||'').trim();
+  out = out.replace(/[٠-٩]/g, ch => String(arabicIndic.indexOf(ch)));
+  out = out.replace(/[۰-۹]/g, ch => String(extArabicIndic.indexOf(ch)));
+  return out;
+}
+
+function buildBarcodeLabelHtml(name, price, code){
+  const cleanCode = normalizeBarcodeCode(code);
+  if(!cleanCode) return null;
   const tmp = document.createElementNS('http://www.w3.org/2000/svg','svg');
-  let svgMarkup = '';
+  tmp.style.position = 'absolute';
+  tmp.style.opacity = '0';
+  tmp.style.pointerEvents = 'none';
+  document.body.appendChild(tmp);
+  let ok = true;
   try{
-    JsBarcode(tmp, code, { format:'CODE128', displayValue:true, width:2, height:50, fontSize:12, margin:4 });
-    svgMarkup = tmp.outerHTML;
+    JsBarcode(tmp, cleanCode, { format:'CODE128', displayValue:true, width:2, height:50, fontSize:12, margin:4 });
   }catch(err){
-    showToast('الكود ده مش صالح لطباعة باركود');
-    return;
+    ok = false;
+    console.error('باركود غير صالح:', code, err);
   }
-
-  const win = window.open('', '_blank');
-  if(!win){ showToast('المتصفح منع فتح نافذة الطباعة'); return; }
-
-  const labelHtml = `
+  const svgHtml = ok ? tmp.outerHTML : '';
+  document.body.removeChild(tmp);
+  if(!ok) return null;
+  return `
     <div class="label">
       <div class="label-name">${escapeHtml(name)}</div>
-      ${svgMarkup}
+      ${svgHtml}
       <div class="label-price">${money(price)} ج.م</div>
     </div>`;
+}
+
+function openBarcodePrintWindow(labelsHtml){
+  const win = window.open('', '_blank');
+  if(!win){ showToast('المتصفح منع فتح نافذة الطباعة'); return; }
 
   win.document.write(`
     <!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
@@ -3161,7 +3238,7 @@ function printBarcodeLabels(name, price, code){
       @media print { .label{ border:none; } }
     </style>
     </head><body>
-    <div class="labels">${labelHtml.repeat(copies)}</div>
+    <div class="labels">${labelsHtml}</div>
     <script>window.onload = () => { window.print(); };<\/script>
     </body></html>`);
   win.document.close();
@@ -3177,7 +3254,7 @@ function groupVariantsBySizeForEdit(variants){
       bySize.set(v.size, g);
       groups.push(g);
     }
-    g.colors.push({id:v.id||uid('v'), color:v.color==='—'?'':v.color, qty:v.qty, barcode:v.barcode||''});
+    g.colors.push({id:v.id||uid('v'), color:v.color==='—'?'':v.color, qty:v.qty});
   });
   return groups;
 }
@@ -3204,7 +3281,6 @@ function renderVariantRows(){
     const colorRows = document.createElement('div');
     colorRows.className = 'color-rows';
     g.colors.forEach((c,cIdx)=>{
-      if(!c.barcode) c.barcode = generateUniqueVariantBarcode();
       const row = document.createElement('div');
       row.className = 'color-row';
       row.innerHTML = `
@@ -3212,29 +3288,12 @@ function renderVariantRows(){
           <input type="text" placeholder="اللون (مثال أحمر)" value="${escapeHtml(c.color)}" data-f="color">
           <input type="number" min="0" class="mono-input" placeholder="الكمية" value="${c.qty}" data-f="qty">
           <button class="variant-remove" title="حذف اللون ده">✕</button>
-        </div>
-        <div class="variant-row-barcode">
-          <input type="text" class="mono-input" placeholder="باركود اللون ده" value="${escapeHtml(c.barcode||'')}" data-f="barcode">
-          <button type="button" class="btn-ghost-sm" data-act="gen-variant-barcode" title="توليد باركود جديد">🎲</button>
-          <button type="button" class="btn-ghost-sm" data-act="print-variant-barcode" title="طباعة الباركود">🖨️</button>
         </div>`;
       row.querySelector('[data-f="color"]').oninput = e=>c.color=e.target.value;
       row.querySelector('[data-f="qty"]').oninput = e=>c.qty=Number(e.target.value)||0;
-      row.querySelector('[data-f="barcode"]').oninput = e=>c.barcode=e.target.value;
       row.querySelector('.variant-remove').onclick = ()=>{
         g.colors.splice(cIdx,1);
         renderVariantRows();
-      };
-      row.querySelector('[data-act="gen-variant-barcode"]').onclick = ()=>{
-        c.barcode = generateUniqueVariantBarcode();
-        renderVariantRows();
-      };
-      row.querySelector('[data-act="print-variant-barcode"]').onclick = ()=>{
-        if(!c.barcode){ showToast('محتاج تولّد باركود للون ده الأول'); return; }
-        const baseName = document.getElementById('fName').value.trim() || 'صنف';
-        const label = baseName + (g.size?' — مقاس '+g.size:'') + (c.color ? ' — '+c.color : '');
-        const price = Number(document.getElementById('fPrice').value)||0;
-        printBarcodeLabels(label, price, c.barcode);
       };
       colorRows.appendChild(row);
     });
@@ -3245,7 +3304,7 @@ function renderVariantRows(){
     addColorBtn.className = 'btn-ghost-sm add-color-btn';
     addColorBtn.textContent = '+ إضافة لون لنفس المقاس';
     addColorBtn.onclick = ()=>{
-      g.colors.push({id:uid('v'), color:'', qty:0, barcode:generateUniqueVariantBarcode()});
+      g.colors.push({id:uid('v'), color:'', qty:0});
       renderVariantRows();
     };
     group.appendChild(addColorBtn);
@@ -3255,23 +3314,9 @@ function renderVariantRows(){
 }
 
 document.getElementById('addVariantRow').addEventListener('click', ()=>{
-  state.editSizeGroups.push({id:uid('sg'), size:'', colors:[{id:uid('v'), color:'', qty:0, barcode:generateUniqueVariantBarcode()}]});
+  state.editSizeGroups.push({id:uid('sg'), size:'', colors:[{id:uid('v'), color:'', qty:0}]});
   renderVariantRows();
 });
-
-/* Unique barcode for a size/color variant — separate pool from product SKUs,
-   used for direct barcode search in the sales page. Sequential (1, 2, 3, ...)
-   so it's easy to read/type/search, not a long random/timestamp code. */
-function generateUniqueVariantBarcode(){
-  let maxNum = 0;
-  const scan = v=>{
-    const raw = (v.barcode||'').trim();
-    if(raw && /^\d+$/.test(raw)) maxNum = Math.max(maxNum, parseInt(raw,10));
-  };
-  DB.getProducts().forEach(p=>p.variants.forEach(scan));
-  (state.editSizeGroups||[]).forEach(g=>g.colors.forEach(scan));
-  return String(maxNum + 1);
-}
 
 document.getElementById('saveProductBtn').addEventListener('click', ()=>{
   const name = document.getElementById('fName').value.trim();
@@ -3286,8 +3331,7 @@ document.getElementById('saveProductBtn').addEventListener('click', ()=>{
     if(!size) return;
     g.colors.forEach(c=>{
       variants.push({
-        id:c.id||uid('v'), size, color:c.color.trim()||'—', qty:Math.max(0,c.qty||0),
-        barcode:(c.barcode||'').trim() || generateUniqueVariantBarcode()
+        id:c.id||uid('v'), size, color:c.color.trim()||'—', qty:Math.max(0,c.qty||0)
       });
     });
   });
@@ -3298,12 +3342,12 @@ document.getElementById('saveProductBtn').addEventListener('click', ()=>{
   if(editId){
     const idx = products.findIndex(p=>p.id===editId);
     products[idx] = { ...products[idx], name, group:state.editGroup, brand:document.getElementById('fBrand').value.trim(),
-      category:document.getElementById('fCategory').value.trim(), sku:document.getElementById('fSku').value.trim(),
+      category:document.getElementById('fCategory').value.trim(), sku:normalizeBarcodeCode(document.getElementById('fSku').value),
       cost, price, variants };
   } else {
     products.push({
       id: uid('p'), name, group:state.editGroup, brand:document.getElementById('fBrand').value.trim(),
-      category:document.getElementById('fCategory').value.trim(), sku:document.getElementById('fSku').value.trim(),
+      category:document.getElementById('fCategory').value.trim(), sku:normalizeBarcodeCode(document.getElementById('fSku').value),
       cost, price, variants
     });
   }
