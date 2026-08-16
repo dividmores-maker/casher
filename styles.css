@@ -1118,6 +1118,9 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
    detail, contact-points search, etc.) — make sure it always stacks above
    them instead of rendering underneath. */
 #receiptModal{z-index:300;}
+/* Purchase detail can be opened from on top of the supplier ledger modal —
+   keep it stacked above so it doesn't render underneath. */
+#purchaseDetailModal{z-index:300;}
 .modal{
   background:linear-gradient(160deg, var(--bg2), var(--bg3));
   border:1px solid var(--line);
