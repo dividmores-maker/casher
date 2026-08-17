@@ -42,13 +42,19 @@ const DB = {
   getSettings(){
     const s = JSON.parse(localStorage.getItem(this.KEYS.SETTINGS) || 'null') || {
       storeName: 'محل الأحذية', storeInfo: '', taxRate: 0, pointsPerCurrency: 0,
-      lowStockAlertsOn: true, lowStockThreshold: 3
+      lowStockAlertsOn: true, lowStockThreshold: 3, cardFeeRate: 1.5
     };
     // Default invoice-content toggles for stores saved before this feature existed
     s.invoiceFields = Object.assign({
       storeInfo: true, cashier: true, discount: true, paymentMethod: true,
       customerInfo: true, customerPhone: true, points: true, thankYou: true
     }, s.invoiceFields || {});
+    // Sequential product barcode counter — next number to hand out. Kept
+    // separate from products.sku so it isn't thrown off by old-style
+    // long/random codes that may already be saved on existing items.
+    s.nextSkuNumber = Number(s.nextSkuNumber) > 0 ? Number(s.nextSkuNumber) : 1;
+    // Visa/card fee percentage — configurable, defaults to 1.5% for stores saved before this existed
+    if(s.cardFeeRate === undefined || s.cardFeeRate === null || isNaN(Number(s.cardFeeRate))) s.cardFeeRate = 1.5;
     return s;
   },
   saveSettings(s){ localStorage.setItem(this.KEYS.SETTINGS, JSON.stringify(s)); }
@@ -56,7 +62,7 @@ const DB = {
 
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function paymentMethodLabel(method){
-  return method==='cash' ? 'كاش' : method==='credit' ? 'بيع بالأجل' : 'بطاقة';
+  return method==='cash' ? 'كاش' : method==='credit' ? 'بيع بالأجل' : method==='transfer' ? 'تحويلات' : 'بطاقة';
 }
 function money(n){ return (Math.round((n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
@@ -381,13 +387,14 @@ function shiftStats(shift){
   const salesTotal = orders.reduce((s,o)=>s+o.total,0);
   const cashTotal = orders.filter(o=>o.method==='cash').reduce((s,o)=>s+o.total,0);
   const cardTotal = orders.filter(o=>o.method==='card').reduce((s,o)=>s+o.total,0);
+  const transferTotal = orders.filter(o=>o.method==='transfer').reduce((s,o)=>s+o.total,0);
   const creditTotal = orders.filter(o=>o.method==='credit').reduce((s,o)=>s+o.total,0);
   const expensesTotal = shiftExpenses(shift.id).reduce((s,e)=>s+e.amount,0);
   const creditCollected = shiftCreditCollected(shift.id);
-  const cardFeeRate = 0.015; // 1.5% رسوم الفيزا
+  const cardFeeRate = Math.max(0, Number(DB.getSettings().cardFeeRate) || 0) / 100; // نسبة رسوم الفيزا القابلة للتعديل من الإعدادات
   const cardFee = cardTotal * cardFeeRate;
   const cardNet = cardTotal - cardFee;
-  return { ordersCount: orders.length, salesTotal, cashTotal, cardTotal, creditTotal, expensesTotal, creditCollected, cardFee, cardNet };
+  return { ordersCount: orders.length, salesTotal, cashTotal, cardTotal, transferTotal, creditTotal, expensesTotal, creditCollected, cardFee, cardNet, cardFeeRate: cardFeeRate*100 };
 }
 function fmtDT(iso){
   const d = new Date(iso);
@@ -489,8 +496,9 @@ function openEndShiftModal(){
     <div class="sum-row"><span>المدة</span><span class="mono">${fmtDuration(active.openedAt)}</span></div>
     <div class="sum-row"><span>عدد الفواتير</span><span class="mono">${stats.ordersCount}</span></div>
     <div class="sum-row"><span>مبيعات كاش</span><span class="mono">${money(stats.cashTotal)}</span></div>
+    <div class="sum-row"><span>مبيعات تحويلات</span><span class="mono">${money(stats.transferTotal)}</span></div>
     <div class="sum-row"><span>إجمالي مبيعات فيزا</span><span class="mono">${money(stats.cardTotal)}</span></div>
-    <div class="sum-row"><span>رسوم الفيزا (1.5%)</span><span class="mono">- ${money(stats.cardFee)}</span></div>
+    <div class="sum-row"><span>رسوم الفيزا (${stats.cardFeeRate}%)</span><span class="mono">- ${money(stats.cardFee)}</span></div>
     <div class="sum-row"><span>صافي الفيزا بعد الرسوم</span><span class="mono">${money(stats.cardNet)}</span></div>
     <div class="sum-row"><span>مبيعات بالأجل (لسه ملهاش تحصيل كامل)</span><span class="mono">${money(stats.creditTotal)}</span></div>
     <div class="sum-row"><span>تحصيل نقدي من الآجل</span><span class="mono">${money(stats.creditCollected)}</span></div>
@@ -1485,7 +1493,8 @@ function showReceipt(order){
     html += `<div class="receipt-line"><span>🎁 نقط اتكسبت</span><span>+${order.pointsEarned} (إجمالي ${c?c.points:order.pointsEarned})</span></div>`;
   }
   if(inv.thankYou){
-    html += `<div class="receipt-sub" style="margin-top:10px;">شكرًا لتعاملكم معنا 🙏</div>`;
+    const msg = (settings.thankYouMessage || '').trim() || 'شكرًا لتعاملكم معنا 🙏';
+    html += `<div class="receipt-sub" style="margin-top:10px;">${escapeHtml(msg)}</div>`;
   }
   document.getElementById('receiptContent').innerHTML = html;
   openModal('receiptModal');
@@ -2188,6 +2197,7 @@ function renderPurchaseItemRows(){
     row.innerHTML = `
       <div class="purchase-item-row-main">
         <input type="text" placeholder="النوع (مثال حذاء رياضي)" value="${escapeHtml(it.type)}" data-f="type">
+        <button type="button" class="btn-ghost-sm" title="إضافة مقاس تاني لنفس النوع">+ إضافة مقاس</button>
         <button class="variant-remove" title="حذف">✕</button>
       </div>
       <div class="purchase-item-row-fields">
@@ -2201,6 +2211,10 @@ function renderPurchaseItemRows(){
     row.querySelector('[data-f="color"]').oninput = e=>{ it.color=e.target.value; };
     row.querySelector('[data-f="qty"]').oninput = e=>{ it.qty=Number(e.target.value)||0; updatePurchaseItemsTotal(); };
     row.querySelector('[data-f="price"]').oninput = e=>{ it.price=Number(e.target.value)||0; updatePurchaseItemsTotal(); };
+    row.querySelector('.btn-ghost-sm').onclick = ()=>{
+      state.editPurchaseItems.splice(idx+1, 0, {id:uid('pit'), type:it.type, size:'', color:it.color, qty:1, price:it.price});
+      renderPurchaseItemRows();
+    };
     row.querySelector('.variant-remove').onclick = ()=>{
       state.editPurchaseItems.splice(idx,1);
       renderPurchaseItemRows();
@@ -3109,8 +3123,8 @@ function openProductModal(product){
   document.getElementById('fName').value = product?.name || '';
   document.getElementById('fBrand').value = product?.brand || '';
   document.getElementById('fCategory').value = product?.category || '';
-  document.getElementById('fSku').value = product?.sku || '';
-  renderSkuBarcodePreview(product?.sku || '');
+  document.getElementById('fSku').value = product ? (product.sku || '') : generateUniqueBarcodeCode();
+  renderSkuBarcodePreview(document.getElementById('fSku').value);
   document.getElementById('fCost').value = product?.cost || '';
   document.getElementById('fPrice').value = product?.price || '';
 
@@ -3119,15 +3133,19 @@ function openProductModal(product){
   openModal('productModal');
 }
 
-/* ---- SKU / barcode generate + print (product modal) ---- */
+/* ---- SKU / barcode generate + print (product modal) ----
+   Sequential, starting at 1 — driven by a persistent counter in settings
+   (not by scanning products.sku), so old-style long/random codes already
+   saved on existing items never throw the sequence off. Advances the
+   counter as soon as a number is handed out, so it's never reused. */
 function generateUniqueBarcodeCode(){
-  const existing = new Set(DB.getProducts().map(p=>(p.sku||'').trim().toUpperCase()));
-  let code;
-  do {
-    // 12-digit numeric code: timestamp tail + random digits, scanner-friendly.
-    code = (Date.now().toString().slice(-8) + Math.floor(Math.random()*10000).toString().padStart(4,'0'));
-  } while(existing.has(code));
-  return code;
+  const settings = DB.getSettings();
+  let n = Math.max(1, Number(settings.nextSkuNumber) || 1);
+  const existing = new Set(DB.getProducts().map(p=>(p.sku||'').trim()));
+  while(existing.has(String(n))) n++;
+  settings.nextSkuNumber = n + 1;
+  DB.saveSettings(settings);
+  return String(n);
 }
 
 function renderSkuBarcodePreview(value){
@@ -3666,6 +3684,7 @@ function loadSettingsForm(){
   document.getElementById('setStoreInfo').value = s.storeInfo;
   document.getElementById('setTaxRate').value = s.taxRate;
   document.getElementById('setPointsRate').value = s.pointsPerCurrency || 0;
+  document.getElementById('setCardFeeRate').value = s.cardFeeRate;
   document.getElementById('setLowStockOn').checked = s.lowStockAlertsOn !== false;
   document.getElementById('setLowStockThreshold').value = s.lowStockThreshold || 3;
   document.getElementById('invShowStoreInfo').checked = s.invoiceFields.storeInfo !== false;
@@ -3676,6 +3695,7 @@ function loadSettingsForm(){
   document.getElementById('invShowCustomerPhone').checked = s.invoiceFields.customerPhone !== false;
   document.getElementById('invShowPoints').checked = s.invoiceFields.points !== false;
   document.getElementById('invShowThankYou').checked = s.invoiceFields.thankYou !== false;
+  document.getElementById('setThankYouMessage').value = s.thankYouMessage || '';
   updateDesktopNotifsStatus();
 }
 
@@ -3702,8 +3722,11 @@ document.getElementById('saveSettingsBtn').addEventListener('click', ()=>{
     storeInfo: document.getElementById('setStoreInfo').value.trim(),
     taxRate: Number(document.getElementById('setTaxRate').value)||0,
     pointsPerCurrency: Math.max(0, Number(document.getElementById('setPointsRate').value)||0),
+    cardFeeRate: Math.max(0, Number(document.getElementById('setCardFeeRate').value)||0),
     lowStockAlertsOn: document.getElementById('setLowStockOn').checked,
     lowStockThreshold: Math.max(1, Number(document.getElementById('setLowStockThreshold').value)||3),
+    nextSkuNumber: DB.getSettings().nextSkuNumber,
+    thankYouMessage: document.getElementById('setThankYouMessage').value.trim(),
     invoiceFields: {
       storeInfo: document.getElementById('invShowStoreInfo').checked,
       cashier: document.getElementById('invShowCashier').checked,
