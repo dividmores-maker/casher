@@ -157,9 +157,15 @@ function awardPoints(customerId, saleTotal){
   return earned;
 }
 /* تسوية النقاط — spend some of a customer's loyalty points as a discount.
-   Value of 1 point = pointsRate() currency (same rate used to earn points). */
+   Value of 1 point at redemption time comes from settings.pointRedeemValue
+   ("كام جنيه تتخصم لكل نقطة"). If it's unset (0/empty) we fall back to the
+   earning rate (pointsRate()) so existing setups keep working unchanged. */
+function pointRedeemValue(){
+  const v = Number(DB.getSettings().pointRedeemValue);
+  return v > 0 ? v : pointsRate();
+}
 function pointsToCurrency(points){
-  return Math.max(0, points||0) * pointsRate();
+  return Math.max(0, points||0) * pointRedeemValue();
 }
 function redeemPointsFromCustomer(customerId, points){
   if(!customerId || !points) return 0;
@@ -259,6 +265,8 @@ let state = {
   selectedColor: null,
   searchTerm: '',
   reportRange: 'today',
+  reportRangeFrom: null,
+  reportRangeTo: null,
   editPurchaseItems: [], // used while purchase modal open
   editSizeGroups: [], // used while product modal open
   editGroup: null,      // used while product modal open
@@ -458,16 +466,13 @@ document.getElementById('openShiftBtn').addEventListener('click', ()=>{
 document.getElementById('confirmOpenShiftBtn').addEventListener('click', ()=>{
   const openingCash = Math.max(0, Number(document.getElementById('openingCashInput').value)||0);
   const shifts = DB.getShifts();
-  const cashier = AUTH.currentUser();
   shifts.push({
     id: uid('sh'),
     openedAt: new Date().toISOString(),
     closedAt: null,
     openingCash,
     closingCash: null,
-    status: 'open',
-    openedBy: cashier?.name || '',
-    closedBy: ''
+    status: 'open'
   });
   DB.saveShifts(shifts);
   closeModal('openShiftModal');
@@ -488,28 +493,83 @@ document.getElementById('resumeShiftBtn').addEventListener('click', ()=>{
 });
 
 /* ---- End shift ---- */
+/* Orders belonging to this shift that were paid with a given method.
+   Used to back the expandable breakdown rectangles in the end-shift summary. */
+function ordersForShiftMethod(shift, method){
+  return shiftOrders(shift.id).filter(o=>o.method===method);
+}
+
+function shiftMethodOrdersListHtml(orders){
+  if(!orders.length) return `<div class="shift-method-empty">مفيش فواتير بالطريقة دي في الوردية</div>`;
+  return orders.map(o=>`
+    <div class="shift-method-order-row" data-order-id="${o.id}">
+      <span class="shift-method-order-num">فاتورة #${o.number}</span>
+      <span class="shift-method-order-time">${new Date(o.date).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}</span>
+      <span class="mono">${money(o.total)}</span>
+    </div>`).join('');
+}
+
+/* Builds a sum-row that expands into a rectangle listing the shift's
+   invoices for that payment method; clicking an invoice opens its receipt. */
+function clickableSumRow(label, total, method, orders){
+  return `
+    <div class="sum-row sum-row-clickable" data-method-toggle="${method}">
+      <span>${label} <span class="sum-row-hint">(${orders.length} فاتورة)</span></span>
+      <span class="mono">${money(total)}</span>
+    </div>
+    <div class="shift-method-panel hidden" data-method-panel="${method}">
+      ${shiftMethodOrdersListHtml(orders)}
+    </div>`;
+}
+
 function openEndShiftModal(){
   const active = getActiveShift();
   if(!active){ showToast('مفيش وردية شغالة دلوقتي'); return; }
   const stats = shiftStats(active);
   const expectedCash = active.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal;
+  const cashOrders = ordersForShiftMethod(active, 'cash');
+  const transferOrders = ordersForShiftMethod(active, 'transfer');
+  const cardOrders = ordersForShiftMethod(active, 'card');
+  const creditOrders = ordersForShiftMethod(active, 'credit');
   document.getElementById('endShiftSummary').innerHTML = `
     <div class="sum-row"><span>بدأت الساعة</span><span class="mono">${fmtDT(active.openedAt)}</span></div>
     <div class="sum-row"><span>رأس المال (بدأت بيه الوردية)</span><span class="mono">${money(active.openingCash)}</span></div>
     <div class="sum-row"><span>المدة</span><span class="mono">${fmtDuration(active.openedAt)}</span></div>
     <div class="sum-row"><span>عدد الفواتير</span><span class="mono">${stats.ordersCount}</span></div>
-    <div class="sum-row"><span>مبيعات كاش</span><span class="mono">${money(stats.cashTotal)}</span></div>
-    <div class="sum-row"><span>مبيعات تحويلات</span><span class="mono">${money(stats.transferTotal)}</span></div>
-    <div class="sum-row"><span>إجمالي مبيعات فيزا</span><span class="mono">${money(stats.cardTotal)}</span></div>
+    ${clickableSumRow('مبيعات كاش', stats.cashTotal, 'cash', cashOrders)}
+    ${clickableSumRow('مبيعات تحويلات', stats.transferTotal, 'transfer', transferOrders)}
+    ${clickableSumRow('إجمالي مبيعات فيزا', stats.cardTotal, 'card', cardOrders)}
     <div class="sum-row"><span>رسوم الفيزا (${stats.cardFeeRate}%)</span><span class="mono">- ${money(stats.cardFee)}</span></div>
     <div class="sum-row"><span>صافي الفيزا بعد الرسوم</span><span class="mono">${money(stats.cardNet)}</span></div>
-    <div class="sum-row"><span>مبيعات بالأجل (لسه ملهاش تحصيل كامل)</span><span class="mono">${money(stats.creditTotal)}</span></div>
+    ${clickableSumRow('مبيعات بالأجل (لسه ملهاش تحصيل كامل)', stats.creditTotal, 'credit', creditOrders)}
     <div class="sum-row"><span>تحصيل نقدي من الآجل</span><span class="mono">${money(stats.creditCollected)}</span></div>
     <div class="sum-row"><span>مصاريف الوردية</span><span class="mono">${money(stats.expensesTotal)}</span></div>
     <div class="sum-row total-row"><span>الكاش المتوقع بالدرج</span><span class="mono">${money(expectedCash)}</span></div>`;
   document.getElementById('closingCashInput').value = expectedCash.toFixed(2);
   updateShiftDiff(expectedCash);
+  wireShiftMethodPanels();
   openModal('endShiftModal');
+}
+
+/* Toggling a breakdown row opens/closes its rectangle; clicking an
+   invoice inside it opens the receipt view for that order. */
+function wireShiftMethodPanels(){
+  document.querySelectorAll('#endShiftSummary [data-method-toggle]').forEach(header=>{
+    const method = header.dataset.methodToggle;
+    const panel = document.querySelector(`#endShiftSummary [data-method-panel="${method}"]`);
+    if(!panel) return;
+    header.onclick = ()=>{
+      panel.classList.toggle('hidden');
+      header.classList.toggle('expanded');
+    };
+    panel.querySelectorAll('.shift-method-order-row').forEach(row=>{
+      row.onclick = (e)=>{
+        e.stopPropagation();
+        const order = DB.getOrders().find(o=>o.id===row.dataset.orderId);
+        if(order) showReceipt(order);
+      };
+    });
+  });
 }
 
 function updateShiftDiff(expectedCash){
@@ -531,64 +591,18 @@ document.getElementById('closingCashInput').addEventListener('input', ()=>{
   updateShiftDiff(active.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal);
 });
 
-/* ---- Shift receipt (printable, reuses the same .receipt look as invoices) ---- */
-function buildShiftReceiptHtml(shift, stats, closingCash){
-  const settings = DB.getSettings();
-  const inv = settings.invoiceFields;
-  const expectedCash = shift.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal;
-  const diff = Math.round((closingCash - expectedCash)*100)/100;
-  let html = `
-    <div class="receipt-title">${escapeHtml(settings.storeName)}</div>
-    ${inv.storeInfo ? `<div class="receipt-sub">${escapeHtml(settings.storeInfo||'')}</div>` : ''}
-    <div class="receipt-sub" style="font-weight:700;">🔴 فاتورة إنهاء وردية</div>
-    <div class="receipt-hr"></div>
-    <div class="receipt-line"><span>بدأت الساعة</span><span>${fmtDT(shift.openedAt)}</span></div>
-    <div class="receipt-line"><span>اتقفلت الساعة</span><span>${fmtDT(shift.closedAt)}</span></div>
-    <div class="receipt-line"><span>المدة</span><span>${fmtDuration(shift.openedAt, shift.closedAt)}</span></div>
-    ${(inv.cashier && shift.openedBy) ? `<div class="receipt-line"><span>فتحها</span><span>${escapeHtml(shift.openedBy)}</span></div>` : ''}
-    ${(inv.cashier && shift.closedBy) ? `<div class="receipt-line"><span>قفلها</span><span>${escapeHtml(shift.closedBy)}</span></div>` : ''}
-    <div class="receipt-hr"></div>
-    <div class="receipt-line"><span>رأس المال (بدأت بيه الوردية)</span><span>${money(shift.openingCash)}</span></div>
-    <div class="receipt-line"><span>عدد الفواتير</span><span>${stats.ordersCount}</span></div>
-    <div class="receipt-line"><span>مبيعات كاش</span><span>${money(stats.cashTotal)}</span></div>
-    <div class="receipt-line"><span>مبيعات تحويلات</span><span>${money(stats.transferTotal)}</span></div>
-    <div class="receipt-line"><span>إجمالي مبيعات فيزا</span><span>${money(stats.cardTotal)}</span></div>
-    <div class="receipt-line"><span>رسوم الفيزا (${stats.cardFeeRate}%)</span><span>- ${money(stats.cardFee)}</span></div>
-    <div class="receipt-line"><span>صافي الفيزا بعد الرسوم</span><span>${money(stats.cardNet)}</span></div>
-    <div class="receipt-line"><span>مبيعات بالأجل</span><span>${money(stats.creditTotal)}</span></div>
-    <div class="receipt-line"><span>تحصيل نقدي من الآجل</span><span>${money(stats.creditCollected)}</span></div>
-    <div class="receipt-line"><span>مصاريف الوردية</span><span>${money(stats.expensesTotal)}</span></div>
-    <div class="receipt-hr"></div>
-    <div class="receipt-line"><strong>الكاش المتوقع بالدرج</strong><strong>${money(expectedCash)}</strong></div>
-    <div class="receipt-line"><strong>الكاش الفعلي (بعد العد)</strong><strong>${money(closingCash)}</strong></div>
-    <div class="receipt-line"><strong>${diff<0?'عجز الدرج':diff>0?'زيادة الدرج':'الفرق'}</strong><strong>${Math.abs(diff)<0.01?'مطابق ✓':money(Math.abs(diff))}</strong></div>`;
-  if(inv.thankYou){
-    html += `<div class="receipt-sub" style="margin-top:10px;">إجمالي مبيعات الوردية: ${money(stats.salesTotal)} ج.م</div>`;
-  }
-  return html;
-}
-function showShiftReceipt(shift){
-  const stats = shiftStats(shift);
-  const closingCash = shift.closingCash != null ? shift.closingCash : (shift.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal);
-  document.getElementById('receiptContent').innerHTML = buildShiftReceiptHtml(shift, stats, closingCash);
-  openModal('receiptModal');
-}
-
 document.getElementById('confirmEndShiftBtn').addEventListener('click', ()=>{
   const active = getActiveShift();
   if(!active) return;
   const shifts = DB.getShifts();
   const idx = shifts.findIndex(s=>s.id===active.id);
-  const cashier = AUTH.currentUser();
   shifts[idx].status = 'closed';
   shifts[idx].closedAt = new Date().toISOString();
   shifts[idx].closingCash = Number(document.getElementById('closingCashInput').value)||0;
-  shifts[idx].closedBy = cashier?.name || '';
   DB.saveShifts(shifts);
   closeModal('endShiftModal');
   showToast('تم إنهاء الوردية');
   checkShiftGate();
-  showShiftReceipt(shifts[idx]);
 });
 
 document.getElementById('endShiftFromGateBtn').addEventListener('click', openEndShiftModal);
@@ -612,27 +626,16 @@ function renderShiftLog(){
       row.innerHTML = `
         <div class="shift-log-top">
           <span class="shift-log-date mono">${fmtDT(s.openedAt)}</span>
-          <div style="display:flex;align-items:center;gap:8px;">
-            ${statusBadge}
-            ${s.status==='closed' ? `<button class="icon-btn shift-log-print-btn" title="طباعة فاتورة الوردية">🖨️</button>` : ''}
-          </div>
+          ${statusBadge}
         </div>
         <div class="shift-log-grid">
-          <div><span>فتحها</span><strong>${escapeHtml(s.openedBy || '—')}</strong></div>
           <div><span>المدة</span><strong>${fmtDuration(s.openedAt, s.closedAt)}</strong></div>
           <div><span>الفواتير</span><strong>${stats.ordersCount}</strong></div>
           <div><span>المبيعات</span><strong>${money(stats.salesTotal)}</strong></div>
           <div><span>المصاريف</span><strong>${money(stats.expensesTotal)}</strong></div>
           <div><span>افتتاحي</span><strong>${money(s.openingCash)}</strong></div>
           ${s.status==='closed' ? `<div><span>ختامي</span><strong>${money(s.closingCash)}</strong></div>` : ''}
-          ${(s.status==='closed' && s.closedBy) ? `<div><span>قفلها</span><strong>${escapeHtml(s.closedBy)}</strong></div>` : ''}
         </div>`;
-      if(s.status==='closed'){
-        row.querySelector('.shift-log-print-btn').addEventListener('click', (ev)=>{
-          ev.stopPropagation();
-          showShiftReceipt(s);
-        });
-      }
       list.appendChild(row);
     });
   }
@@ -1158,13 +1161,13 @@ function renderTicketCustomerRow(total){
 function openRedeemPointsModal(){
   const c = state.selectedCustomer;
   if(!c) return;
-  const rate = pointsRate();
-  if(rate <= 0){ showToast('نظام نقاط الولاء مقفول من الإعدادات'); return; }
+  if(pointsRate() <= 0){ showToast('نظام نقاط الولاء مقفول من الإعدادات'); return; }
   if(!c.points){ showToast('العميل ده لسه معهوش نقط'); return; }
 
+  const redeemRate = pointRedeemValue();
   const subtotal = cartSubtotal();
   const maxByPoints = c.points;
-  const maxByTotal = Math.floor(subtotal / rate);
+  const maxByTotal = redeemRate>0 ? Math.floor(subtotal / redeemRate) : 0;
   const maxRedeemable = Math.max(0, Math.min(maxByPoints, maxByTotal));
 
   document.getElementById('redeemPointsBalance').textContent =
@@ -1181,7 +1184,6 @@ function openRedeemPointsModal(){
   setTimeout(()=>input.focus(), 50);
 }
 function updateRedeemPointsPreview(){
-  const rate = pointsRate();
   const input = document.getElementById('redeemPointsInput');
   const maxRedeemable = Math.max(0, Number(input.max) || 0);
   let points = Math.max(0, Math.floor(Number(input.value) || 0));
@@ -1196,11 +1198,11 @@ document.getElementById('redeemPointsInput').addEventListener('input', updateRed
 document.getElementById('confirmRedeemPointsBtn').addEventListener('click', ()=>{
   const c = state.selectedCustomer;
   if(!c) return;
-  const rate = pointsRate();
+  const redeemRate = pointRedeemValue();
   const input = document.getElementById('redeemPointsInput');
   const subtotal = cartSubtotal();
   const maxByPoints = c.points||0;
-  const maxByTotal = rate>0 ? Math.floor(subtotal / rate) : 0;
+  const maxByTotal = redeemRate>0 ? Math.floor(subtotal / redeemRate) : 0;
   let points = Math.max(0, Math.floor(Number(input.value) || 0));
   points = Math.min(points, maxByPoints, maxByTotal);
 
@@ -3365,10 +3367,19 @@ function renderVariantRows(){
         <div class="color-row-main">
           <input type="text" placeholder="اللون (مثال أحمر)" value="${escapeHtml(c.color)}" data-f="color">
           <input type="number" min="0" class="mono-input" placeholder="الكمية" value="${c.qty}" data-f="qty">
+          <button class="variant-add-size" title="إضافة مقاس لنفس اللون ده">+ مقاس</button>
           <button class="variant-remove" title="حذف اللون ده">✕</button>
         </div>`;
       row.querySelector('[data-f="color"]').oninput = e=>c.color=e.target.value;
       row.querySelector('[data-f="qty"]').oninput = e=>c.qty=Number(e.target.value)||0;
+      row.querySelector('.variant-add-size').onclick = ()=>{
+        const newGroup = {id:uid('sg'), size:'', colors:[{id:uid('v'), color:c.color, qty:0}]};
+        state.editSizeGroups.splice(gIdx+1, 0, newGroup);
+        renderVariantRows();
+        const groups = document.querySelectorAll('#variantRows .size-group');
+        const newSizeInput = groups[gIdx+1] && groups[gIdx+1].querySelector('[data-f="size"]');
+        if(newSizeInput) newSizeInput.focus();
+      };
       row.querySelector('.variant-remove').onclick = ()=>{
         g.colors.splice(cIdx,1);
         renderVariantRows();
@@ -3444,32 +3455,52 @@ document.querySelectorAll('.report-range .chip').forEach(chip=>{
     document.querySelectorAll('.report-range .chip').forEach(c=>c.classList.remove('active'));
     chip.classList.add('active');
     state.reportRange = chip.dataset.range;
+    document.getElementById('reportCustomRange').classList.toggle('hidden', state.reportRange!=='custom');
+    if(state.reportRange==='custom') return; // wait for the user to pick dates below
     renderReports();
   });
 });
+document.getElementById('reportRangeFrom').addEventListener('change', ()=>{
+  state.reportRangeFrom = document.getElementById('reportRangeFrom').value || null;
+  renderReports();
+});
+document.getElementById('reportRangeTo').addEventListener('change', ()=>{
+  state.reportRangeTo = document.getElementById('reportRangeTo').value || null;
+  renderReports();
+});
 
-function filteredOrders(){
-  const orders = DB.getOrders();
-  if(state.reportRange==='all') return orders;
+/* "custom" range: an inclusive [from, to] window picked via the two date
+   inputs. Either side can be left empty to mean "no limit" on that end
+   (e.g. only "من تاريخ" set = from that date to today). */
+function customRangeBounds(){
+  const from = state.reportRangeFrom ? new Date(state.reportRangeFrom + 'T00:00:00') : null;
+  const to = state.reportRangeTo ? new Date(state.reportRangeTo + 'T23:59:59') : null;
+  return {from, to};
+}
+function inReportRange(dateStr){
+  if(state.reportRange==='all') return true;
+  if(state.reportRange==='custom'){
+    const {from, to} = customRangeBounds();
+    const d = new Date(dateStr);
+    if(from && d < from) return false;
+    if(to && d > to) return false;
+    return true;
+  }
   const now = new Date();
   const cutDays = state.reportRange==='today' ? 0 : state.reportRange==='week' ? 7 : 30;
   const cutoff = new Date(now);
   cutoff.setDate(cutoff.getDate() - cutDays);
   cutoff.setHours(0,0,0,0);
-  return orders.filter(o=> new Date(o.date) >= cutoff);
+  return new Date(dateStr) >= cutoff;
+}
+function filteredOrders(){
+  return DB.getOrders().filter(o=> inReportRange(o.date));
 }
 
 /* Same date-range logic as filteredOrders(), applied to expenses,
    so "net profit" in the reports view lines up with the same period. */
 function expensesForReportRange(){
-  const expenses = DB.getExpenses();
-  if(state.reportRange==='all') return expenses;
-  const now = new Date();
-  const cutDays = state.reportRange==='today' ? 0 : state.reportRange==='week' ? 7 : 30;
-  const cutoff = new Date(now);
-  cutoff.setDate(cutoff.getDate() - cutDays);
-  cutoff.setHours(0,0,0,0);
-  return expenses.filter(e=> new Date(e.date) >= cutoff);
+  return DB.getExpenses().filter(e=> inReportRange(e.date));
 }
 
 function renderReports(){
@@ -3490,9 +3521,22 @@ function renderReports(){
 
   renderDailyChart(orders);
   renderTopProducts(orders);
-  renderOrdersTable(orders);
+  renderOrdersTable(ordersForTable());
   renderExpensesTable();
 }
+
+/* Orders shown in "سجل الفواتير": normally the same date-range-filtered
+   list as the rest of the report, but typing an invoice number searches
+   across ALL invoices regardless of the selected date range, so a cashier
+   can find an old invoice without first guessing/changing the range. */
+function ordersForTable(){
+  const q = (document.getElementById('orderNumberSearch').value||'').trim();
+  if(q) return DB.getOrders().filter(o=> String(o.number).includes(q));
+  return filteredOrders();
+}
+document.getElementById('orderNumberSearch').addEventListener('input', ()=>{
+  renderOrdersTable(ordersForTable());
+});
 
 const EXPENSE_CATEGORY_LABELS = {
   suppliers: '🚚 موردين', workers: '👷 عمال', rent: '🏠 إيجار', bills: '💡 فواتير',
@@ -3521,12 +3565,29 @@ function renderExpensesTable(){
 
 function renderDailyChart(orders){
   const days = {};
-  const dayCount = state.reportRange==='today' ? 1 : state.reportRange==='week' ? 7 : state.reportRange==='month' ? 30 : 14;
-  for(let i=dayCount-1;i>=0;i--){
-    const d = new Date();
-    d.setDate(d.getDate()-i);
-    const key = d.toISOString().slice(0,10);
-    days[key] = 0;
+  if(state.reportRange==='custom'){
+    const {from, to} = customRangeBounds();
+    /* Build the bar for exactly the picked window; fall back to the
+       orders' own date span if a side was left open-ended. */
+    const start = from || (orders.length ? new Date(Math.min(...orders.map(o=>new Date(o.date)))) : new Date());
+    const end = to || (orders.length ? new Date(Math.max(...orders.map(o=>new Date(o.date)))) : new Date());
+    const dayMs = 24*60*60*1000;
+    let spanDays = Math.max(1, Math.round((new Date(end.toDateString()) - new Date(start.toDateString()))/dayMs) + 1);
+    spanDays = Math.min(spanDays, 62); // keep the bar chart readable for very wide ranges
+    for(let i=spanDays-1;i>=0;i--){
+      const d = new Date(end);
+      d.setDate(d.getDate()-i);
+      const key = d.toISOString().slice(0,10);
+      days[key] = 0;
+    }
+  } else {
+    const dayCount = state.reportRange==='today' ? 1 : state.reportRange==='week' ? 7 : state.reportRange==='month' ? 30 : 14;
+    for(let i=dayCount-1;i>=0;i--){
+      const d = new Date();
+      d.setDate(d.getDate()-i);
+      const key = d.toISOString().slice(0,10);
+      days[key] = 0;
+    }
   }
   orders.forEach(o=>{
     const key = new Date(o.date).toISOString().slice(0,10);
@@ -3572,8 +3633,9 @@ function renderTopProducts(orders){
 
 function renderOrdersTable(orders){
   const tbody = document.getElementById('ordersTableBody');
+  const isSearching = !!(document.getElementById('orderNumberSearch').value||'').trim();
   if(!orders.length){
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش فواتير في الفترة دي</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-note">${isSearching ? 'مفيش فاتورة برقم كده' : 'مفيش فواتير في الفترة دي'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
@@ -3744,6 +3806,7 @@ function loadSettingsForm(){
   document.getElementById('setStoreInfo').value = s.storeInfo;
   document.getElementById('setTaxRate').value = s.taxRate;
   document.getElementById('setPointsRate').value = s.pointsPerCurrency || 0;
+  document.getElementById('setPointRedeemValue').value = s.pointRedeemValue || '';
   document.getElementById('setCardFeeRate').value = s.cardFeeRate;
   document.getElementById('setLowStockOn').checked = s.lowStockAlertsOn !== false;
   document.getElementById('setLowStockThreshold').value = s.lowStockThreshold || 3;
@@ -3782,6 +3845,7 @@ document.getElementById('saveSettingsBtn').addEventListener('click', ()=>{
     storeInfo: document.getElementById('setStoreInfo').value.trim(),
     taxRate: Number(document.getElementById('setTaxRate').value)||0,
     pointsPerCurrency: Math.max(0, Number(document.getElementById('setPointsRate').value)||0),
+    pointRedeemValue: Math.max(0, Number(document.getElementById('setPointRedeemValue').value)||0),
     cardFeeRate: Math.max(0, Number(document.getElementById('setCardFeeRate').value)||0),
     lowStockAlertsOn: document.getElementById('setLowStockOn').checked,
     lowStockThreshold: Math.max(1, Number(document.getElementById('setLowStockThreshold').value)||3),
