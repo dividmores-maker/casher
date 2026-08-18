@@ -528,6 +528,49 @@ document.getElementById('closingCashInput').addEventListener('input', ()=>{
   updateShiftDiff(active.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal);
 });
 
+/* ---- Shift receipt (printable, reuses the same .receipt look as invoices) ---- */
+function buildShiftReceiptHtml(shift, stats, closingCash){
+  const settings = DB.getSettings();
+  const inv = settings.invoiceFields;
+  const expectedCash = shift.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal;
+  const diff = Math.round((closingCash - expectedCash)*100)/100;
+  const cashier = AUTH.currentUser();
+  let html = `
+    <div class="receipt-title">${escapeHtml(settings.storeName)}</div>
+    ${inv.storeInfo ? `<div class="receipt-sub">${escapeHtml(settings.storeInfo||'')}</div>` : ''}
+    <div class="receipt-sub" style="font-weight:700;">🔴 فاتورة إنهاء وردية</div>
+    <div class="receipt-hr"></div>
+    <div class="receipt-line"><span>بدأت الساعة</span><span>${fmtDT(shift.openedAt)}</span></div>
+    <div class="receipt-line"><span>اتقفلت الساعة</span><span>${fmtDT(shift.closedAt)}</span></div>
+    <div class="receipt-line"><span>المدة</span><span>${fmtDuration(shift.openedAt, shift.closedAt)}</span></div>
+    ${(inv.cashier && cashier?.name) ? `<div class="receipt-line"><span>الكاشير</span><span>${escapeHtml(cashier.name)}</span></div>` : ''}
+    <div class="receipt-hr"></div>
+    <div class="receipt-line"><span>رأس المال (بدأت بيه الوردية)</span><span>${money(shift.openingCash)}</span></div>
+    <div class="receipt-line"><span>عدد الفواتير</span><span>${stats.ordersCount}</span></div>
+    <div class="receipt-line"><span>مبيعات كاش</span><span>${money(stats.cashTotal)}</span></div>
+    <div class="receipt-line"><span>مبيعات تحويلات</span><span>${money(stats.transferTotal)}</span></div>
+    <div class="receipt-line"><span>إجمالي مبيعات فيزا</span><span>${money(stats.cardTotal)}</span></div>
+    <div class="receipt-line"><span>رسوم الفيزا (${stats.cardFeeRate}%)</span><span>- ${money(stats.cardFee)}</span></div>
+    <div class="receipt-line"><span>صافي الفيزا بعد الرسوم</span><span>${money(stats.cardNet)}</span></div>
+    <div class="receipt-line"><span>مبيعات بالأجل</span><span>${money(stats.creditTotal)}</span></div>
+    <div class="receipt-line"><span>تحصيل نقدي من الآجل</span><span>${money(stats.creditCollected)}</span></div>
+    <div class="receipt-line"><span>مصاريف الوردية</span><span>${money(stats.expensesTotal)}</span></div>
+    <div class="receipt-hr"></div>
+    <div class="receipt-line"><strong>الكاش المتوقع بالدرج</strong><strong>${money(expectedCash)}</strong></div>
+    <div class="receipt-line"><strong>الكاش الفعلي (بعد العد)</strong><strong>${money(closingCash)}</strong></div>
+    <div class="receipt-line"><strong>${diff<0?'عجز الدرج':diff>0?'زيادة الدرج':'الفرق'}</strong><strong>${Math.abs(diff)<0.01?'مطابق ✓':money(Math.abs(diff))}</strong></div>`;
+  if(inv.thankYou){
+    html += `<div class="receipt-sub" style="margin-top:10px;">إجمالي مبيعات الوردية: ${money(stats.salesTotal)} ج.م</div>`;
+  }
+  return html;
+}
+function showShiftReceipt(shift){
+  const stats = shiftStats(shift);
+  const closingCash = shift.closingCash != null ? shift.closingCash : (shift.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal);
+  document.getElementById('receiptContent').innerHTML = buildShiftReceiptHtml(shift, stats, closingCash);
+  openModal('receiptModal');
+}
+
 document.getElementById('confirmEndShiftBtn').addEventListener('click', ()=>{
   const active = getActiveShift();
   if(!active) return;
@@ -540,6 +583,7 @@ document.getElementById('confirmEndShiftBtn').addEventListener('click', ()=>{
   closeModal('endShiftModal');
   showToast('تم إنهاء الوردية');
   checkShiftGate();
+  showShiftReceipt(shifts[idx]);
 });
 
 document.getElementById('endShiftFromGateBtn').addEventListener('click', openEndShiftModal);
@@ -563,7 +607,10 @@ function renderShiftLog(){
       row.innerHTML = `
         <div class="shift-log-top">
           <span class="shift-log-date mono">${fmtDT(s.openedAt)}</span>
-          ${statusBadge}
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${statusBadge}
+            ${s.status==='closed' ? `<button class="icon-btn shift-log-print-btn" title="طباعة فاتورة الوردية">🖨️</button>` : ''}
+          </div>
         </div>
         <div class="shift-log-grid">
           <div><span>المدة</span><strong>${fmtDuration(s.openedAt, s.closedAt)}</strong></div>
@@ -573,6 +620,12 @@ function renderShiftLog(){
           <div><span>افتتاحي</span><strong>${money(s.openingCash)}</strong></div>
           ${s.status==='closed' ? `<div><span>ختامي</span><strong>${money(s.closingCash)}</strong></div>` : ''}
         </div>`;
+      if(s.status==='closed'){
+        row.querySelector('.shift-log-print-btn').addEventListener('click', (ev)=>{
+          ev.stopPropagation();
+          showShiftReceipt(s);
+        });
+      }
       list.appendChild(row);
     });
   }
