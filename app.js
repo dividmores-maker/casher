@@ -458,13 +458,16 @@ document.getElementById('openShiftBtn').addEventListener('click', ()=>{
 document.getElementById('confirmOpenShiftBtn').addEventListener('click', ()=>{
   const openingCash = Math.max(0, Number(document.getElementById('openingCashInput').value)||0);
   const shifts = DB.getShifts();
+  const cashier = AUTH.currentUser();
   shifts.push({
     id: uid('sh'),
     openedAt: new Date().toISOString(),
     closedAt: null,
     openingCash,
     closingCash: null,
-    status: 'open'
+    status: 'open',
+    openedBy: cashier?.name || '',
+    closedBy: ''
   });
   DB.saveShifts(shifts);
   closeModal('openShiftModal');
@@ -534,7 +537,6 @@ function buildShiftReceiptHtml(shift, stats, closingCash){
   const inv = settings.invoiceFields;
   const expectedCash = shift.openingCash + stats.cashTotal + stats.creditCollected - stats.expensesTotal;
   const diff = Math.round((closingCash - expectedCash)*100)/100;
-  const cashier = AUTH.currentUser();
   let html = `
     <div class="receipt-title">${escapeHtml(settings.storeName)}</div>
     ${inv.storeInfo ? `<div class="receipt-sub">${escapeHtml(settings.storeInfo||'')}</div>` : ''}
@@ -543,7 +545,8 @@ function buildShiftReceiptHtml(shift, stats, closingCash){
     <div class="receipt-line"><span>بدأت الساعة</span><span>${fmtDT(shift.openedAt)}</span></div>
     <div class="receipt-line"><span>اتقفلت الساعة</span><span>${fmtDT(shift.closedAt)}</span></div>
     <div class="receipt-line"><span>المدة</span><span>${fmtDuration(shift.openedAt, shift.closedAt)}</span></div>
-    ${(inv.cashier && cashier?.name) ? `<div class="receipt-line"><span>الكاشير</span><span>${escapeHtml(cashier.name)}</span></div>` : ''}
+    ${(inv.cashier && shift.openedBy) ? `<div class="receipt-line"><span>فتحها</span><span>${escapeHtml(shift.openedBy)}</span></div>` : ''}
+    ${(inv.cashier && shift.closedBy) ? `<div class="receipt-line"><span>قفلها</span><span>${escapeHtml(shift.closedBy)}</span></div>` : ''}
     <div class="receipt-hr"></div>
     <div class="receipt-line"><span>رأس المال (بدأت بيه الوردية)</span><span>${money(shift.openingCash)}</span></div>
     <div class="receipt-line"><span>عدد الفواتير</span><span>${stats.ordersCount}</span></div>
@@ -576,9 +579,11 @@ document.getElementById('confirmEndShiftBtn').addEventListener('click', ()=>{
   if(!active) return;
   const shifts = DB.getShifts();
   const idx = shifts.findIndex(s=>s.id===active.id);
+  const cashier = AUTH.currentUser();
   shifts[idx].status = 'closed';
   shifts[idx].closedAt = new Date().toISOString();
   shifts[idx].closingCash = Number(document.getElementById('closingCashInput').value)||0;
+  shifts[idx].closedBy = cashier?.name || '';
   DB.saveShifts(shifts);
   closeModal('endShiftModal');
   showToast('تم إنهاء الوردية');
@@ -613,12 +618,14 @@ function renderShiftLog(){
           </div>
         </div>
         <div class="shift-log-grid">
+          <div><span>فتحها</span><strong>${escapeHtml(s.openedBy || '—')}</strong></div>
           <div><span>المدة</span><strong>${fmtDuration(s.openedAt, s.closedAt)}</strong></div>
           <div><span>الفواتير</span><strong>${stats.ordersCount}</strong></div>
           <div><span>المبيعات</span><strong>${money(stats.salesTotal)}</strong></div>
           <div><span>المصاريف</span><strong>${money(stats.expensesTotal)}</strong></div>
           <div><span>افتتاحي</span><strong>${money(s.openingCash)}</strong></div>
           ${s.status==='closed' ? `<div><span>ختامي</span><strong>${money(s.closingCash)}</strong></div>` : ''}
+          ${(s.status==='closed' && s.closedBy) ? `<div><span>قفلها</span><strong>${escapeHtml(s.closedBy)}</strong></div>` : ''}
         </div>`;
       if(s.status==='closed'){
         row.querySelector('.shift-log-print-btn').addEventListener('click', (ev)=>{
