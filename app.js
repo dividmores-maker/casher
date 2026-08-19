@@ -125,24 +125,44 @@ function findOrCreateCustomer(name, phone){
 }
 /* Remember the specific person (name + phone) who received an invoice under a
    company, so the cashier can quickly re-pick them next time. Dedupes by
-   phone when given, otherwise by name. */
+   phone when given, otherwise by name. Loyalty points live on the contact
+   itself (not the company) — every contact gets its own id + points balance,
+   returned here so the caller can attach it to the invoice. */
 function addContactToCustomer(customerId, contactName, contactPhone){
   contactName = (contactName||'').trim();
   contactPhone = (contactPhone||'').trim();
-  if(!customerId || !contactName) return;
+  if(!customerId || !contactName) return null;
   const customers = DB.getCustomers();
   const customer = customers.find(c=>c.id===customerId);
-  if(!customer) return;
+  if(!customer) return null;
   if(!customer.contacts) customer.contacts = [];
   let existing = null;
   if(contactPhone) existing = customer.contacts.find(p=>p.phone && p.phone===contactPhone);
   if(!existing) existing = customer.contacts.find(p=>p.name.trim().toLowerCase()===contactName.toLowerCase());
   if(existing){
     if(contactPhone && !existing.phone) existing.phone = contactPhone;
+    if(!existing.id) existing.id = uid('contact');
+    if(existing.points===undefined) existing.points = 0;
   } else {
-    customer.contacts.push({ name: contactName, phone: contactPhone });
+    existing = { id: uid('contact'), name: contactName, phone: contactPhone, points:0, purchaseCount:0, purchaseTotal:0 };
+    customer.contacts.push(existing);
   }
   DB.saveCustomers(customers);
+  return existing;
+}
+
+/* One-time repair: assign an id + points balance to any contact created
+   before per-person points existed. Runs once at startup; a no-op after. */
+function ensureContactIds(){
+  const customers = DB.getCustomers();
+  let changed = false;
+  customers.forEach(c=>{
+    (c.contacts||[]).forEach(p=>{
+      if(!p.id){ p.id = uid('contact'); changed = true; }
+      if(p.points===undefined){ p.points = 0; changed = true; }
+    });
+  });
+  if(changed) DB.saveCustomers(customers);
 }
 
 /* ---- Find the actual person (عميل) a phone/name belongs to, across every
@@ -163,27 +183,44 @@ function findMatchingContacts(term){
 }
 
 /* Invoices a specific person actually bought under a given متعامل — matched
-   by their phone when we have one, otherwise by name. */
+   by their contact id when we have one (new invoices), falling back to
+   phone/name for invoices saved before contacts had ids. */
 function ordersForContact(customerId, contact){
   return DB.getOrders().filter(o=>{
     if(o.customerId !== customerId) return false;
+    if(contact.id && o.contactId) return o.contactId === contact.id;
     if(contact.phone) return o.contactPhone === contact.phone;
     return (o.contactName||'').trim().toLowerCase() === contact.name.trim().toLowerCase();
   }).sort((a,b)=> new Date(b.date) - new Date(a.date));
 }
-function awardPoints(customerId, saleTotal){
-  if(!customerId) return 0;
+
+/* Sum of a company's contacts' points — shown on the customers page as an
+   overview; the real balance a cashier redeems from always lives on the
+   individual contact, not this total. */
+function customerTotalPoints(customer){
+  return (customer.contacts||[]).reduce((s,p)=>s+(p.points||0),0);
+}
+
+/* Loyalty points are earned and spent per عميل (contact), not per متعامل
+   (company) — so each person's balance only ever comes off his own
+   invoices. */
+function awardPointsToContact(customerId, contactId, saleTotal){
+  if(!customerId || !contactId) return 0;
   const customers = DB.getCustomers();
   const customer = customers.find(c=>c.id===customerId);
   if(!customer) return 0;
+  const contact = (customer.contacts||[]).find(p=>p.id===contactId);
+  if(!contact) return 0;
   const earned = pointsForAmount(saleTotal);
-  customer.points = (customer.points||0) + earned;
+  contact.points = (contact.points||0) + earned;
+  contact.purchaseCount = (contact.purchaseCount||0) + 1;
+  contact.purchaseTotal = (contact.purchaseTotal||0) + saleTotal;
   customer.purchaseCount = (customer.purchaseCount||0) + 1;
   customer.purchaseTotal = (customer.purchaseTotal||0) + saleTotal;
   DB.saveCustomers(customers);
   return earned;
 }
-/* تسوية النقاط — spend some of a customer's loyalty points as a discount.
+/* تسوية النقاط — spend some of a عميل's own loyalty points as a discount.
    Value of 1 point at redemption time comes from settings.pointRedeemValue
    ("كام جنيه تتخصم لكل نقطة"). If it's unset (0/empty) we fall back to the
    earning rate (pointsRate()) so existing setups keep working unchanged. */
@@ -194,19 +231,21 @@ function pointRedeemValue(){
 function pointsToCurrency(points){
   return Math.max(0, points||0) * pointRedeemValue();
 }
-function redeemPointsFromCustomer(customerId, points){
-  if(!customerId || !points) return 0;
+function redeemPointsFromContact(customerId, contactId, points){
+  if(!customerId || !contactId || !points) return 0;
   const customers = DB.getCustomers();
   const customer = customers.find(c=>c.id===customerId);
   if(!customer) return 0;
-  const redeemed = Math.max(0, Math.min(Math.floor(points), customer.points||0));
-  customer.points = Math.max(0, (customer.points||0) - redeemed);
+  const contact = (customer.contacts||[]).find(p=>p.id===contactId);
+  if(!contact) return 0;
+  const redeemed = Math.max(0, Math.min(Math.floor(points), contact.points||0));
+  contact.points = Math.max(0, (contact.points||0) - redeemed);
   DB.saveCustomers(customers);
   return redeemed;
 }
 function resetPointsRedemption(){
   state.pointsRedeemed = 0;
-  state.pointsRedeemedCustomerId = null;
+  state.pointsRedeemedContactId = null;
 }
 function customerCreditRemaining(customerId){
   return creditOrders()
@@ -216,7 +255,7 @@ function customerCreditRemaining(customerId){
 
 /* One-time repair: earlier versions saved the order to storage BEFORE
    stamping pointsEarned on it, so historical invoices show "—" for points
-   even though the company's total points are correct. Backfill a
+   even though the person's total points are correct. Backfill a
    best-effort estimate (using today's points rate) for any order that's
    missing the field, so the per-invoice column isn't stuck empty forever. */
 function repairMissingOrderPoints(){
@@ -264,6 +303,7 @@ function seedIfEmpty(){
 }
 seedIfEmpty();
 repairMissingOrderPoints();
+ensureContactIds();
 
 /* ---------- Seed default users on first run ---------- */
 function seedUsersIfEmpty(){
@@ -299,7 +339,7 @@ let state = {
   editGroup: null,      // used while product modal open
   editUserRole: null,    // used while user modal open
   selectedCustomer: null,   // company attached to the current cart, if any
-  selectedContact: null,    // {name, phone} — the specific person receiving this invoice, under selectedCustomer
+  selectedContact: null,    // {id, name, phone, points} — the specific person receiving this invoice; loyalty points live here, under selectedCustomer
   customerSearchTerm: '',
   customerPickerSearchTerm: '',
   purchaseFilter: 'open',
@@ -309,7 +349,7 @@ let state = {
   expenseSearchTerm: '',
   workerSearchTerm: '',
   pointsRedeemed: 0,          // points being used as a discount on the current cart (تسوية النقاط)
-  pointsRedeemedCustomerId: null   // which customer those points belong to
+  pointsRedeemedContactId: null   // which عميل (contact) those points belong to
 };
 
 /* =========================================================
@@ -1159,15 +1199,17 @@ function renderTicketCustomerRow(total){
     document.getElementById('pickCustomerBtn').onclick = openCustomerPickerModal;
     return;
   }
+  // النقط بتاعة العميل (الشخص) نفسه، مش المتعامل — كل واحد رصيده لوحده.
+  const contactPoints = contact.points||0;
   const willEarn = pointsForAmount(total ?? cartSubtotal());
-  const redeemedActive = state.pointsRedeemed>0 && state.pointsRedeemedCustomerId===c.id;
+  const redeemedActive = state.pointsRedeemed>0 && state.pointsRedeemedContactId===contact.id;
   let pointsLine = pointsRate() > 0
-    ? `🎁 ${c.points||0} نقطة${willEarn>0 ? ' — هيكسب '+willEarn+' كمان من الفاتورة دي' : ''}`
-    : `🎁 ${c.points||0} نقطة`;
+    ? `🎁 ${contactPoints} نقطة${willEarn>0 ? ' — هيكسب '+willEarn+' كمان من الفاتورة دي' : ''}`
+    : `🎁 ${contactPoints} نقطة`;
   if(redeemedActive){
     pointsLine += ` — مستخدم منها ${state.pointsRedeemed} نقطة (خصم ${money(pointsToCurrency(state.pointsRedeemed))} ج.م)`;
   }
-  const showRedeemBtn = pointsRate() > 0 && (c.points||0) > 0;
+  const showRedeemBtn = pointsRate() > 0 && contactPoints > 0;
   row.innerHTML = `
     <div class="ticket-customer-info">
       <span class="ticket-customer-name">🏢 ${escapeHtml(c.name)} (${escapeHtml(customerCodeLabel(c))}) — 👤 ${escapeHtml(contact.name)}${contact.phone ? ' ('+escapeHtml(contact.phone)+')' : ''}</span>
@@ -1190,25 +1232,26 @@ function renderTicketCustomerRow(total){
   }
 }
 
-/* ---- تسوية النقاط modal ---- */
+/* ---- تسوية النقاط modal — الرصيد والخصم دايمًا على العميل (الشخص)
+   المختار حاليًا، مش على المتعامل. ---- */
 function openRedeemPointsModal(){
-  const c = state.selectedCustomer;
-  if(!c) return;
+  const contact = state.selectedContact;
+  if(!contact) return;
   if(pointsRate() <= 0){ showToast('نظام نقاط الولاء مقفول من الإعدادات'); return; }
-  if(!c.points){ showToast('العميل ده لسه معهوش نقط'); return; }
+  if(!contact.points){ showToast('العميل ده لسه معهوش نقط'); return; }
 
   const redeemRate = pointRedeemValue();
   const subtotal = cartSubtotal();
-  const maxByPoints = c.points;
+  const maxByPoints = contact.points;
   const maxByTotal = redeemRate>0 ? Math.floor(subtotal / redeemRate) : 0;
   const maxRedeemable = Math.max(0, Math.min(maxByPoints, maxByTotal));
 
   document.getElementById('redeemPointsBalance').textContent =
-    `رصيد ${c.name}: 🎁 ${c.points} نقطة (قيمتها ${money(pointsToCurrency(c.points))} ج.م)`;
+    `رصيد ${contact.name}: 🎁 ${contact.points} نقطة (قيمتها ${money(pointsToCurrency(contact.points))} ج.م)`;
 
   const input = document.getElementById('redeemPointsInput');
   input.max = maxRedeemable;
-  const prefill = (state.pointsRedeemed>0 && state.pointsRedeemedCustomerId===c.id)
+  const prefill = (state.pointsRedeemed>0 && state.pointsRedeemedContactId===contact.id)
     ? Math.min(state.pointsRedeemed, maxRedeemable)
     : maxRedeemable;
   input.value = prefill;
@@ -1219,28 +1262,45 @@ function openRedeemPointsModal(){
 function updateRedeemPointsPreview(){
   const input = document.getElementById('redeemPointsInput');
   const maxRedeemable = Math.max(0, Number(input.max) || 0);
+  // كان بيعمل input.value = points على كل حرف يتكتب، فلو الرقم اللي بتكتبه
+  // أكبر من الحد الأقصى، الخانة كانت بترجع 0 فورًا وتحس إنها "مش بترضى تكتب".
+  // دلوقتي منسيبش الخانة نفسها إلا وقت التأكيد أو لما تخرج منها (blur)،
+  // وبس نوريك تحذير لو الرقم اللي كتبته هيتقص عند الحد الأقصى.
+  let raw = Math.max(0, Math.floor(Number(input.value) || 0));
+  let points = Math.min(raw, maxRedeemable);
+  const discountValue = pointsToCurrency(points);
+  if(raw > maxRedeemable){
+    document.getElementById('redeemPointsPreview').textContent =
+      `أقصى عدد نقط ممكن تستخدمه دلوقتي هو ${maxRedeemable} نقطة (هيتخصم ${money(discountValue)} ج.م)`;
+  } else {
+    document.getElementById('redeemPointsPreview').textContent = points > 0
+      ? `هيتخصم ${money(discountValue)} ج.م من الفاتورة مقابل ${points} نقطة`
+      : 'اكتب عدد النقط اللي عايز تستخدمها، أو سيبها 0 لإلغاء الخصم';
+  }
+}
+function clampRedeemPointsInput(){
+  const input = document.getElementById('redeemPointsInput');
+  const maxRedeemable = Math.max(0, Number(input.max) || 0);
   let points = Math.max(0, Math.floor(Number(input.value) || 0));
   if(points > maxRedeemable) points = maxRedeemable;
   input.value = points;
-  const discountValue = pointsToCurrency(points);
-  document.getElementById('redeemPointsPreview').textContent = points > 0
-    ? `هيتخصم ${money(discountValue)} ج.م من الفاتورة مقابل ${points} نقطة`
-    : 'اكتب عدد النقط اللي عايز تستخدمها، أو سيبها 0 لإلغاء الخصم';
+  updateRedeemPointsPreview();
 }
 document.getElementById('redeemPointsInput').addEventListener('input', updateRedeemPointsPreview);
+document.getElementById('redeemPointsInput').addEventListener('blur', clampRedeemPointsInput);
 document.getElementById('confirmRedeemPointsBtn').addEventListener('click', ()=>{
-  const c = state.selectedCustomer;
-  if(!c) return;
+  const contact = state.selectedContact;
+  if(!contact) return;
   const redeemRate = pointRedeemValue();
   const input = document.getElementById('redeemPointsInput');
   const subtotal = cartSubtotal();
-  const maxByPoints = c.points||0;
+  const maxByPoints = contact.points||0;
   const maxByTotal = redeemRate>0 ? Math.floor(subtotal / redeemRate) : 0;
   let points = Math.max(0, Math.floor(Number(input.value) || 0));
   points = Math.min(points, maxByPoints, maxByTotal);
 
   state.pointsRedeemed = points;
-  state.pointsRedeemedCustomerId = points > 0 ? c.id : null;
+  state.pointsRedeemedContactId = points > 0 ? contact.id : null;
   document.getElementById('discountInput').value = points > 0 ? pointsToCurrency(points) : 0;
 
   closeModal('redeemPointsModal');
@@ -1345,7 +1405,7 @@ function renderCustomerPickerList(){
       opt.className = 'picker-option';
       opt.innerHTML = `
         <span class="picker-option-label">🏷️ ${escapeHtml(customerCodeLabel(c))} — ${escapeHtml(c.name)}${c.phone ? ' — '+escapeHtml(c.phone) : ''}</span>
-        <span class="picker-option-stock">🎁 ${c.points||0} نقطة</span>`;
+        <span class="picker-option-stock">${(c.contacts||[]).length} عميل مسجل</span>`;
       opt.onclick = ()=> goToContactStep(c);
       list.appendChild(opt);
     });
@@ -1365,7 +1425,9 @@ document.getElementById('quickAddCustomerBtn').addEventListener('click', ()=>{
 
 /* ---- Step 2: the specific person (اسم العميل + التليفون) receiving this invoice ---- */
 function goToContactStep(customer){
-  if(state.pointsRedeemedCustomerId && state.pointsRedeemedCustomerId!==customer.id){
+  // Any pending نقط discount belonged to whichever عميل was selected before —
+  // clear it now since we're about to (re)pick the person for this cart.
+  if(state.pointsRedeemedContactId){
     resetPointsRedemption();
     document.getElementById('discountInput').value = 0;
   }
@@ -1385,7 +1447,9 @@ function goToContactStep(customer){
     [...contacts].reverse().forEach(p=>{
       const opt = document.createElement('div');
       opt.className = 'picker-option';
-      opt.innerHTML = `<span class="picker-option-label">👤 ${escapeHtml(p.name)}${p.phone ? ' — '+escapeHtml(p.phone) : ''}</span>`;
+      opt.innerHTML = `
+        <span class="picker-option-label">👤 ${escapeHtml(p.name)}${p.phone ? ' — '+escapeHtml(p.phone) : ''}</span>
+        <span class="picker-option-stock">🎁 ${p.points||0} نقطة</span>`;
       opt.onclick = ()=> confirmContact(p.name, p.phone);
       chipsWrap.appendChild(opt);
     });
@@ -1400,8 +1464,10 @@ function confirmContact(name, phone){
   phone = (phone||'').trim();
   if(!name){ showToast('اكتب اسم العميل المستلم'); return; }
   if(!phone){ showToast('اكتب رقم تليفون العميل'); return; }
-  state.selectedContact = { name, phone };
-  addContactToCustomer(state.selectedCustomer.id, name, phone);
+  // خزّن/حدّث العميل ده تحت المتعامل ده، وارجع نفس الـ record (بمعرفه
+  // ورصيد نقطه) عشان النقط والخصم بعد كده يبقوا على الشخص ده بالظبط.
+  const saved = addContactToCustomer(state.selectedCustomer.id, name, phone);
+  state.selectedContact = saved || { name, phone };
   closeModal('customerPickerModal');
   renderCart();
   showToast('اتحدد العميل للفاتورة');
@@ -1529,18 +1595,22 @@ function completeSale(method, creditInfo){
   }
 
   // The specific person (name + phone) who actually received this invoice,
-  // under the company above — captured mandatorily before checkout.
+  // under the company above — captured mandatorily before checkout. Points
+  // are earned/spent on this contact record specifically, so we keep its id.
   if(state.selectedContact){
     order.contactName = state.selectedContact.name;
     order.contactPhone = state.selectedContact.phone || '';
-    if(order.customerId) addContactToCustomer(order.customerId, order.contactName, order.contactPhone);
+    if(order.customerId){
+      const savedContact = addContactToCustomer(order.customerId, order.contactName, order.contactPhone);
+      order.contactId = savedContact ? savedContact.id : (state.selectedContact.id || null);
+    }
   }
 
   const orders = DB.getOrders();
-  if(order.customerId && state.pointsRedeemed>0 && state.pointsRedeemedCustomerId===order.customerId){
-    order.pointsRedeemed = redeemPointsFromCustomer(order.customerId, state.pointsRedeemed);
+  if(order.customerId && order.contactId && state.pointsRedeemed>0 && state.pointsRedeemedContactId===order.contactId){
+    order.pointsRedeemed = redeemPointsFromContact(order.customerId, order.contactId, state.pointsRedeemed);
   }
-  order.pointsEarned = order.customerId ? awardPoints(order.customerId, total) : 0;
+  order.pointsEarned = (order.customerId && order.contactId) ? awardPointsToContact(order.customerId, order.contactId, total) : 0;
   orders.push(order);
   DB.saveOrders(orders);
 
@@ -1621,8 +1691,10 @@ function showReceipt(order){
     html += `<div class="receipt-line"><span>🎁 نقط اتخصمت</span><span>-${order.pointsRedeemed}</span></div>`;
   }
   if(inv.points && order.customerId && order.pointsEarned>0){
-    const c = DB.getCustomers().find(x=>x.id===order.customerId);
-    html += `<div class="receipt-line"><span>🎁 نقط اتكسبت</span><span>+${order.pointsEarned} (إجمالي ${c?c.points:order.pointsEarned})</span></div>`;
+    const contactBalance = (order.contactId && orderCustomer)
+      ? (orderCustomer.contacts||[]).find(p=>p.id===order.contactId)
+      : null;
+    html += `<div class="receipt-line"><span>🎁 نقط اتكسبت</span><span>+${order.pointsEarned} (إجمالي ${contactBalance ? contactBalance.points : order.pointsEarned})</span></div>`;
   }
   if(inv.thankYou){
     const msg = (settings.thankYouMessage || '').trim() || 'شكرًا لتعاملكم معنا 🙏';
@@ -1659,7 +1731,7 @@ function renderCustomersView(){
       <td class="mono">${escapeHtml(c.phone||'—')}</td>
       <td class="mono">${c.purchaseCount||0}</td>
       <td class="mono">${money(c.purchaseTotal||0)}</td>
-      <td class="mono">🎁 ${c.points||0}</td>
+      <td class="mono">🎁 ${customerTotalPoints(c)}</td>
       <td class="mono">${debt>0.01 ? money(debt) : '—'}</td>
       <td><button class="icon-btn" title="تعديل">✏️</button> <button class="icon-btn" title="حذف">🗑️</button></td>`;
     tr.querySelector('.customer-name-link').onclick = ()=>openCustomerDetailModal(c.id);
@@ -1692,7 +1764,7 @@ function renderCustomerPeopleMatches(term){
         <span class="person-match-name">👤 ${escapeHtml(contact.name)}</span>
         <span class="person-match-meta">${contact.phone ? '📱 '+escapeHtml(contact.phone)+' — ' : ''}🏢 ${escapeHtml(customer.name)}</span>
       </div>
-      <div class="person-match-stats">${orders.length} فاتورة — ${money(total)} ج.م</div>
+      <div class="person-match-stats">🎁 ${contact.points||0} نقطة — ${orders.length} فاتورة — ${money(total)} ج.م</div>
       <button class="btn-ghost">عرض فواتيره</button>`;
     card.querySelector('button').onclick = ()=> openCustomerDetailModal(customer.id, contact);
     wrap.appendChild(card);
@@ -1713,10 +1785,12 @@ function openCustomerDetailModal(customerId, contactFilter){
     <span>🗓️ متعامل معانا منذ: <strong>${new Date(c.createdAt).toLocaleDateString('ar-EG')}</strong></span>`;
 
   const debt = customerCreditRemaining(c.id);
+  const pointsLabel = contactFilter ? `نقاط ${contactFilter.name}` : '🎁 إجمالي نقاط كل العملاء';
+  const pointsValue = contactFilter ? (contactFilter.points||0) : customerTotalPoints(c);
   document.getElementById('customerDetailStats').innerHTML = `
     <div class="stat-card accent">
-      <div class="stat-label">🎁 النقاط الحالية</div>
-      <div class="stat-value mono">${c.points||0}</div>
+      <div class="stat-label">🎁 ${escapeHtml(pointsLabel)}</div>
+      <div class="stat-value mono">${pointsValue}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">عدد المشتريات</div>
@@ -1739,8 +1813,10 @@ function openCustomerDetailModal(customerId, contactFilter){
     contactsWrap.innerHTML = '';
     [...contacts].reverse().forEach(p=>{
       const chip = document.createElement('div');
-      chip.className = 'contact-chip';
-      chip.innerHTML = `<span>👤 ${escapeHtml(p.name)}</span>${p.phone ? `<span class="mono">${escapeHtml(p.phone)}</span>` : ''}`;
+      chip.className = 'contact-chip clickable-row';
+      chip.title = 'دوس عشان تشوف فواتير وأرصدة نقط الشخص ده لوحده';
+      chip.innerHTML = `<span>👤 ${escapeHtml(p.name)}</span>${p.phone ? `<span class="mono">${escapeHtml(p.phone)}</span>` : ''}<span class="mono">🎁 ${p.points||0}</span>`;
+      chip.onclick = ()=> openCustomerDetailModal(c.id, p);
       contactsWrap.appendChild(chip);
     });
   }
@@ -1869,10 +1945,10 @@ function renderContactSearchResults(){
     return;
   }
 
-  const totalPoints = matches.reduce((s,o)=>s + (o.pointsEarned||0), 0);
+  const totalPoints = findMatchingContacts(term).reduce((s,{contact})=>s+(contact.points||0), 0);
   const totalAmount = matches.reduce((s,o)=>s + (o.total||0), 0);
   summary.classList.remove('hidden');
-  summary.innerHTML = `🎁 إجمالي النقاط: <strong>${totalPoints}</strong> نقطة — على <strong>${matches.length}</strong> فاتورة — بإجمالي مشتريات <strong>${money(totalAmount)}</strong> ج.م`;
+  summary.innerHTML = `🎁 الرصيد الحالي: <strong>${totalPoints}</strong> نقطة — على <strong>${matches.length}</strong> فاتورة — بإجمالي مشتريات <strong>${money(totalAmount)}</strong> ج.م`;
 
   tbody.innerHTML = '';
   matches.forEach(o=>{
