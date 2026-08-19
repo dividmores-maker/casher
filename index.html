@@ -81,6 +81,9 @@
       <button class="nav-item" data-view="purchases">
         <span class="nav-icon">🚚</span><span>المشتروات</span>
       </button>
+      <button class="nav-item" data-view="expenses">
+        <span class="nav-icon">💸</span><span>المصروفات اليومية</span>
+      </button>
       <button class="nav-item" data-view="workers" data-admin-only="true">
         <span class="nav-icon">👷</span><span>العمال</span>
       </button>
@@ -205,7 +208,7 @@
       <div class="view-header">
         <h1>العملاء (المتعاملين)</h1>
         <div class="view-header-actions">
-          <button class="btn-ghost" id="searchContactPointsBtn">🔍 نقاط عميل بالاسم</button>
+          <button class="btn-ghost" id="searchContactPointsBtn">🔍 نقاط عميل بالاسم أو التليفون</button>
           <button class="btn-primary" id="addCustomerBtn">+ إضافة متعامل</button>
         </div>
       </div>
@@ -214,6 +217,8 @@
         <span class="search-icon">🔍</span>
         <input type="text" id="customerSearchInput" placeholder="دور بالاسم، الكود، أو رقم التليفون...">
       </div>
+
+      <div class="customer-people-matches hidden" id="customerPeopleMatches"></div>
 
       <div class="inventory-table-wrap">
         <table class="inventory-table">
@@ -238,6 +243,11 @@
     <section class="view hidden" id="view-credit">
       <div class="view-header">
         <h1>البيع الآجل</h1>
+      </div>
+
+      <div class="search-box" style="margin-bottom:16px;max-width:360px;">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="creditSearchInput" placeholder="دور بالاسم أو رقم التليفون...">
       </div>
 
       <div class="expense-cat-filter" id="creditFilter">
@@ -287,6 +297,11 @@
         </div>
       </div>
 
+      <div class="search-box" style="margin-bottom:16px;max-width:360px;">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="purchaseSearchInput" placeholder="دور باسم المورد أو البيان...">
+      </div>
+
       <div class="expense-cat-filter" id="purchaseFilter">
         <button class="chip active" data-pfilter="open">لسه مستحق</button>
         <button class="chip" data-pfilter="settled">اتسدد بالكامل</button>
@@ -324,6 +339,55 @@
       </div>
     </section>
 
+    <!-- EXPENSES VIEW (المصروفات اليومية — إيجار، فواتير، صيانة، تسويق، أخرى) -->
+    <section class="view hidden" id="view-expenses">
+      <div class="view-header">
+        <h1>المصروفات اليومية</h1>
+        <div class="view-header-actions">
+          <button class="btn-primary" id="addExpenseBtn">+ إضافة مصروف</button>
+        </div>
+      </div>
+
+      <div class="search-box" style="margin-bottom:16px;max-width:360px;">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="expenseSearchInput" placeholder="دور بالبيان أو نوع المصروف...">
+      </div>
+
+      <div class="expense-cat-filter" id="expenseDateFilter">
+        <button class="chip active" data-efilter="today">النهارده</button>
+        <button class="chip" data-efilter="week">آخر 7 أيام</button>
+        <button class="chip" data-efilter="month">آخر 30 يوم</button>
+        <button class="chip" data-efilter="all">الكل</button>
+      </div>
+
+      <div class="report-stats">
+        <div class="stat-card warn">
+          <div class="stat-label">إجمالي المصروفات في الفترة</div>
+          <div class="stat-value mono" id="expenseTotalStat">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">عدد العمليات</div>
+          <div class="stat-value mono" id="expenseCountStat">0</div>
+        </div>
+      </div>
+
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>النوع</th>
+              <th>البيان</th>
+              <th>المبلغ</th>
+              <th>بواسطة</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="dailyExpensesTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- WORKERS VIEW (العمال — البيانات، المرتبات، السلف، المنح، المكافآت، الإجازات) -->
     <section class="view hidden" id="view-workers">
       <div class="view-header">
@@ -331,6 +395,11 @@
         <div class="view-header-actions">
           <button class="btn-primary" id="addWorkerBtn">+ إضافة عامل</button>
         </div>
+      </div>
+
+      <div class="search-box" style="margin-bottom:16px;max-width:360px;">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="workerSearchInput" placeholder="دور بالاسم، الوظيفة، أو التليفون...">
       </div>
 
       <div class="report-stats">
@@ -380,6 +449,11 @@
           <button class="btn-ghost" id="restockScanBtn">📷 تزويد الكمية بالباركود</button>
           <button class="btn-primary" id="addProductBtn">+ إضافة صنف جديد</button>
         </div>
+      </div>
+
+      <div class="search-box" style="margin-bottom:16px;max-width:360px;">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="inventorySearchInput" placeholder="دور بالاسم، الكود، الماركة، أو الفئة...">
       </div>
 
       <div class="inventory-stats">
@@ -477,7 +551,7 @@
       <div class="report-panel">
         <div class="report-panel-header">
           <h3>سجل الفواتير</h3>
-          <input type="text" id="orderNumberSearch" class="order-number-search" placeholder="🔍 دور برقم الفاتورة...">
+          <input type="text" id="orderNumberSearch" class="order-number-search" placeholder="🔍 دور برقم الفاتورة، اسم العميل، أو رقم تليفونه...">
         </div>
         <div class="orders-table-wrap">
           <table class="inventory-table" id="ordersTable">
@@ -485,6 +559,7 @@
               <tr>
                 <th>رقم الفاتورة</th>
                 <th>التاريخ والوقت</th>
+                <th>العميل</th>
                 <th>عدد القطع</th>
                 <th>الإجمالي</th>
                 <th>طريقة الدفع</th>
@@ -975,7 +1050,7 @@
           <input type="text" id="contactNameInput" placeholder="مثال: أحمد محمود">
         </div>
         <div class="form-field">
-          <label>رقم التليفون (اختياري)</label>
+          <label>رقم التليفون</label>
           <input type="text" id="contactPhoneInput" placeholder="01xxxxxxxxx">
         </div>
 
@@ -1025,7 +1100,8 @@
       <h3 class="customer-detail-subhead">الأشخاص المسجلين تحت المتعامل ده</h3>
       <div class="customer-contacts-list" id="customerDetailContactsList"></div>
 
-      <h3 class="customer-detail-subhead">سجل الفواتير</h3>
+      <h3 class="customer-detail-subhead" id="customerDetailOrdersHead">سجل الفواتير</h3>
+      <div class="empty-note hidden" id="customerDetailFilterNote" style="padding:0 0 8px;"></div>
       <div class="inventory-table-wrap">
         <table class="inventory-table">
           <thead>
@@ -1059,7 +1135,7 @@
     <div class="modal-body">
       <div class="search-box">
         <span class="search-icon">🔍</span>
-        <input type="text" id="contactSearchInput" placeholder="اكتب اسم العميل (الشخص) اللي عايز تعرف نقطه...">
+        <input type="text" id="contactSearchInput" placeholder="اكتب اسم العميل أو رقم تليفونه اللي عايز تعرف نقطه...">
       </div>
 
       <div class="contact-search-summary hidden" id="contactSearchSummary"></div>
@@ -1248,6 +1324,44 @@
       <h3 class="customer-detail-subhead">سجل الدفعات</h3>
       <div class="contact-search-summary hidden" id="purchaseDetailPaymentsEmpty"></div>
       <div class="picker-options" id="purchaseDetailPayments"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Expense Modal (مصروف يومي يدوي) -->
+<div class="modal-overlay hidden" id="expenseModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>💸 إضافة مصروف</h2>
+      <button class="modal-close" data-close="expenseModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>نوع المصروف</label>
+        <select id="expenseCategorySelect">
+          <option value="rent">🏠 إيجار</option>
+          <option value="bills">💡 فواتير</option>
+          <option value="maintenance">🔧 صيانة</option>
+          <option value="marketing">📣 تسويق</option>
+          <option value="other">📦 أخرى</option>
+        </select>
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>البيان</label>
+        <input type="text" id="expenseNote" placeholder="مثال: فاتورة كهرباء شهر 8">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>المبلغ</label>
+        <input type="number" id="expenseAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-field">
+        <label>التاريخ</label>
+        <input type="date" id="expenseDate">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="expenseModal">إلغاء</button>
+      <button class="btn-primary" id="confirmAddExpenseBtn">حفظ المصروف</button>
     </div>
   </div>
 </div>

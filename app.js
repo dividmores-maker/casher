@@ -144,6 +144,33 @@ function addContactToCustomer(customerId, contactName, contactPhone){
   }
   DB.saveCustomers(customers);
 }
+
+/* ---- Find the actual person (عميل) a phone/name belongs to, across every
+   متعامل — used so a phone search surfaces the specific customer instead
+   of stopping at the company he bought under. ---- */
+function findMatchingContacts(term){
+  term = (term||'').trim().toLowerCase();
+  if(!term) return [];
+  const results = [];
+  DB.getCustomers().forEach(customer=>{
+    (customer.contacts||[]).forEach(contact=>{
+      const phoneHit = contact.phone && contact.phone.includes(term);
+      const nameHit = contact.name && contact.name.toLowerCase().includes(term);
+      if(phoneHit || nameHit) results.push({ customer, contact });
+    });
+  });
+  return results;
+}
+
+/* Invoices a specific person actually bought under a given متعامل — matched
+   by their phone when we have one, otherwise by name. */
+function ordersForContact(customerId, contact){
+  return DB.getOrders().filter(o=>{
+    if(o.customerId !== customerId) return false;
+    if(contact.phone) return o.contactPhone === contact.phone;
+    return (o.contactName||'').trim().toLowerCase() === contact.name.trim().toLowerCase();
+  }).sort((a,b)=> new Date(b.date) - new Date(a.date));
+}
 function awardPoints(customerId, saleTotal){
   if(!customerId) return 0;
   const customers = DB.getCustomers();
@@ -276,6 +303,11 @@ let state = {
   customerSearchTerm: '',
   customerPickerSearchTerm: '',
   purchaseFilter: 'open',
+  inventorySearchTerm: '',
+  creditSearchTerm: '',
+  purchaseSearchTerm: '',
+  expenseSearchTerm: '',
+  workerSearchTerm: '',
   pointsRedeemed: 0,          // points being used as a discount on the current cart (تسوية النقاط)
   pointsRedeemedCustomerId: null   // which customer those points belong to
 };
@@ -670,6 +702,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(view==='customers') renderCustomersView();
     if(view==='credit') renderCreditView();
     if(view==='purchases') renderPurchasesView();
+    if(view==='expenses') renderDailyExpensesView();
     if(view==='workers') renderWorkersView();
     if(view==='reports') renderReports();
     if(view==='settings'){ loadSettingsForm(); renderUsersTable(); }
@@ -1252,6 +1285,10 @@ function renderCustomerPickerList(){
   const term = state.customerPickerSearchTerm.trim().toLowerCase();
   const allCustomers = DB.getCustomers();
   let customers = allCustomers;
+  // If the typed name/phone belongs to a specific شخص (عميل) who bought
+  // under some متعامل before, surface him directly — searching by phone
+  // shouldn't just dump you back at "اختيار المتعامل".
+  let contactMatches = term ? findMatchingContacts(term) : [];
   if(term){
     customers = customers.filter(c=>
       c.name.toLowerCase().includes(term) || (c.phone||'').includes(term) || (c.code||'').toLowerCase().includes(term));
@@ -1267,20 +1304,52 @@ function renderCustomerPickerList(){
   }
   if(quickAddHead) quickAddHead.textContent = 'مش لاقي المتعامل؟ ضيفه بسرعة';
 
-  if(!customers.length){
-    list.innerHTML = '<div class="empty-note">مفيش متعامل بالاسم أو الرقم ده. ضيفه تحت 👇</div>';
+  if(!customers.length && !contactMatches.length){
+    list.innerHTML = '<div class="empty-note">مفيش عميل أو متعامل بالاسم أو الرقم ده. ضيفه تحت 👇</div>';
     return;
   }
   list.innerHTML = '';
-  [...customers].reverse().forEach(c=>{
-    const opt = document.createElement('div');
-    opt.className = 'picker-option';
-    opt.innerHTML = `
-      <span class="picker-option-label">🏷️ ${escapeHtml(customerCodeLabel(c))} — ${escapeHtml(c.name)}${c.phone ? ' — '+escapeHtml(c.phone) : ''}</span>
-      <span class="picker-option-stock">🎁 ${c.points||0} نقطة</span>`;
-    opt.onclick = ()=> goToContactStep(c);
-    list.appendChild(opt);
-  });
+
+  if(contactMatches.length){
+    const head = document.createElement('div');
+    head.className = 'empty-note';
+    head.style.cssText = 'padding:0 0 6px;text-align:right;';
+    head.textContent = '👤 العميل ده اشترى قبل كده تحت:';
+    list.appendChild(head);
+    contactMatches.forEach(({customer, contact})=>{
+      const opt = document.createElement('div');
+      opt.className = 'picker-option';
+      opt.innerHTML = `
+        <span class="picker-option-label">👤 ${escapeHtml(contact.name)}${contact.phone ? ' — '+escapeHtml(contact.phone) : ''}</span>
+        <span class="picker-option-stock">🏢 ${escapeHtml(customer.name)}</span>`;
+      opt.onclick = ()=>{
+        goToContactStep(customer);
+        document.getElementById('contactNameInput').value = contact.name;
+        document.getElementById('contactPhoneInput').value = contact.phone || '';
+        if(contact.phone) confirmContact(contact.name, contact.phone);
+      };
+      list.appendChild(opt);
+    });
+  }
+
+  if(customers.length){
+    if(contactMatches.length){
+      const head2 = document.createElement('div');
+      head2.className = 'empty-note';
+      head2.style.cssText = 'padding:10px 0 6px;text-align:right;';
+      head2.textContent = '🏢 أو اختار المتعامل مباشرة:';
+      list.appendChild(head2);
+    }
+    [...customers].reverse().forEach(c=>{
+      const opt = document.createElement('div');
+      opt.className = 'picker-option';
+      opt.innerHTML = `
+        <span class="picker-option-label">🏷️ ${escapeHtml(customerCodeLabel(c))} — ${escapeHtml(c.name)}${c.phone ? ' — '+escapeHtml(c.phone) : ''}</span>
+        <span class="picker-option-stock">🎁 ${c.points||0} نقطة</span>`;
+      opt.onclick = ()=> goToContactStep(c);
+      list.appendChild(opt);
+    });
+  }
 }
 document.getElementById('customerPickerSearch').addEventListener('input', e=>{
   state.customerPickerSearchTerm = e.target.value;
@@ -1330,6 +1399,7 @@ function confirmContact(name, phone){
   name = (name||'').trim();
   phone = (phone||'').trim();
   if(!name){ showToast('اكتب اسم العميل المستلم'); return; }
+  if(!phone){ showToast('اكتب رقم تليفون العميل'); return; }
   state.selectedContact = { name, phone };
   addContactToCustomer(state.selectedCustomer.id, name, phone);
   closeModal('customerPickerModal');
@@ -1573,6 +1643,7 @@ function renderCustomersView(){
     customers = customers.filter(c=>
       c.name.toLowerCase().includes(term) || (c.phone||'').includes(term) || (c.code||'').toLowerCase().includes(term));
   }
+  renderCustomerPeopleMatches(term);
   const tbody = document.getElementById('customersTableBody');
   if(!customers.length){
     tbody.innerHTML = '<tr><td colspan="8" class="empty-note">مفيش متعاملين مسجلين لسه</td></tr>';
@@ -1598,8 +1669,40 @@ function renderCustomersView(){
   });
 }
 
-/* ---- Company detail page: النقاط + الأشخاص المسجلين تحتها + سجل فواتيرها (رقم الفاتورة/الاسم/النقاط) ---- */
-function openCustomerDetailModal(customerId){
+/* Search results for the specific شخص (عميل) a phone/name belongs to — shown
+   above the متعاملين table so a phone search gives you the person and the
+   invoices he actually bought, not just whichever company matched. */
+function renderCustomerPeopleMatches(term){
+  const wrap = document.getElementById('customerPeopleMatches');
+  const matches = term ? findMatchingContacts(term) : [];
+  if(!matches.length){
+    wrap.classList.add('hidden');
+    wrap.innerHTML = '';
+    return;
+  }
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = '';
+  matches.forEach(({customer, contact})=>{
+    const orders = ordersForContact(customer.id, contact);
+    const total = orders.reduce((s,o)=>s+o.total,0);
+    const card = document.createElement('div');
+    card.className = 'person-match-card';
+    card.innerHTML = `
+      <div class="person-match-info">
+        <span class="person-match-name">👤 ${escapeHtml(contact.name)}</span>
+        <span class="person-match-meta">${contact.phone ? '📱 '+escapeHtml(contact.phone)+' — ' : ''}🏢 ${escapeHtml(customer.name)}</span>
+      </div>
+      <div class="person-match-stats">${orders.length} فاتورة — ${money(total)} ج.م</div>
+      <button class="btn-ghost">عرض فواتيره</button>`;
+    card.querySelector('button').onclick = ()=> openCustomerDetailModal(customer.id, contact);
+    wrap.appendChild(card);
+  });
+}
+
+/* ---- Company detail page: النقاط + الأشخاص المسجلين تحتها + سجل فواتيرها (رقم الفاتورة/الاسم/النقاط)
+   contactFilter (optional): {name, phone} — when given, the invoice list
+   below is scoped to that specific person instead of the whole متعامل. ---- */
+function openCustomerDetailModal(customerId, contactFilter){
   const c = DB.getCustomers().find(x=>x.id===customerId);
   if(!c) return;
 
@@ -1642,10 +1745,26 @@ function openCustomerDetailModal(customerId){
     });
   }
 
-  const orders = DB.getOrders().filter(o=>o.customerId===c.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const orders = contactFilter
+    ? ordersForContact(c.id, contactFilter)
+    : DB.getOrders().filter(o=>o.customerId===c.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  const ordersHead = document.getElementById('customerDetailOrdersHead');
+  const filterNote = document.getElementById('customerDetailFilterNote');
+  if(contactFilter){
+    ordersHead.textContent = `سجل فواتير 👤 ${contactFilter.name}`;
+    filterNote.classList.remove('hidden');
+    filterNote.innerHTML = `بتشوف فواتير <strong>${escapeHtml(contactFilter.name)}</strong> بس تحت المتعامل ده — <a href="#" id="customerDetailShowAllOrders">عرض كل فواتير المتعامل</a>`;
+    document.getElementById('customerDetailShowAllOrders').onclick = (e)=>{ e.preventDefault(); openCustomerDetailModal(c.id); };
+  } else {
+    ordersHead.textContent = 'سجل الفواتير';
+    filterNote.classList.add('hidden');
+    filterNote.innerHTML = '';
+  }
+
   const tbody = document.getElementById('customerDetailOrders');
   if(!orders.length){
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش فواتير مسجلة للمتعامل ده لسه</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-note">مفيش فواتير مسجلة ${contactFilter ? 'للعميل ده' : 'للمتعامل ده'} لسه</td></tr>`;
   } else {
     tbody.innerHTML = '';
     orders.forEach(o=>{
@@ -1734,19 +1853,19 @@ function renderContactSearchResults(){
   if(!term){
     summary.classList.add('hidden');
     summary.innerHTML = '';
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">اكتب اسم العميل فوق عشان تشوف كل فواتيره ونقاطه</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">اكتب اسم العميل أو رقم تليفونه فوق عشان تشوف كل فواتيره ونقاطه</td></tr>';
     return;
   }
 
   const customers = DB.getCustomers();
   const matches = DB.getOrders()
-    .filter(o => o.contactName && o.contactName.toLowerCase().includes(term))
+    .filter(o => (o.contactName && o.contactName.toLowerCase().includes(term)) || (o.contactPhone && o.contactPhone.includes(term)))
     .sort((a,b)=> new Date(b.date) - new Date(a.date));
 
   if(!matches.length){
     summary.classList.add('hidden');
     summary.innerHTML = '';
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش فواتير باسم عميل شبه ده</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش فواتير باسم أو رقم تليفون عميل شبه ده</td></tr>';
     return;
   }
 
@@ -1863,6 +1982,12 @@ function renderCreditView(){
   else if(state.creditFilter==='settled') list = all.filter(o=>creditIsSettled(o));
   else list = all;
 
+  const term = state.creditSearchTerm.trim().toLowerCase();
+  if(term){
+    list = list.filter(o=>
+      (o.customerName||'').toLowerCase().includes(term) || (o.customerPhone||'').includes(term));
+  }
+
   const tbody = document.getElementById('creditTableBody');
   if(!list.length){
     tbody.innerHTML = '<tr><td colspan="8" class="empty-note">مفيش فواتير آجل هنا</td></tr>';
@@ -1901,6 +2026,11 @@ document.querySelectorAll('#creditFilter .chip').forEach(chip=>{
     state.creditFilter = chip.dataset.cfilter;
     renderCreditView();
   });
+});
+
+document.getElementById('creditSearchInput').addEventListener('input', e=>{
+  state.creditSearchTerm = e.target.value;
+  renderCreditView();
 });
 
 let creditPaymentOrderId = null;
@@ -2035,6 +2165,12 @@ function renderPurchasesView(){
   else if(state.purchaseFilter==='settled') list = all.filter(p=>purchaseIsSettled(p));
   else list = all;
 
+  const term = state.purchaseSearchTerm.trim().toLowerCase();
+  if(term){
+    list = list.filter(p=>
+      (p.supplierName||'').toLowerCase().includes(term) || (p.note||'').toLowerCase().includes(term));
+  }
+
   const tbody = document.getElementById('purchasesTableBody');
   if(!list.length){
     tbody.innerHTML = '<tr><td colspan="9" class="empty-note">مفيش عمليات شراء هنا</td></tr>';
@@ -2073,6 +2209,11 @@ document.querySelectorAll('#purchaseFilter .chip').forEach(chip=>{
     state.purchaseFilter = chip.dataset.pfilter;
     renderPurchasesView();
   });
+});
+
+document.getElementById('purchaseSearchInput').addEventListener('input', e=>{
+  state.purchaseSearchTerm = e.target.value;
+  renderPurchasesView();
 });
 
 /* ---- Suppliers management ---- */
@@ -2491,13 +2632,19 @@ function renderWorkersView(){
   document.getElementById('workerAdvancesStat').textContent = money(workers.reduce((s,w)=>s+workerAdvancesTotal(w.id),0));
   document.getElementById('workerNetStat').textContent = money(workers.reduce((s,w)=>s+workerNetDue(w),0));
 
+  const term = state.workerSearchTerm.trim().toLowerCase();
+  const list = term
+    ? workers.filter(w=>
+        (w.name||'').toLowerCase().includes(term) || (w.jobTitle||'').toLowerCase().includes(term) || (w.phone||'').includes(term))
+    : workers;
+
   const tbody = document.getElementById('workersTableBody');
-  if(!workers.length){
+  if(!list.length){
     tbody.innerHTML = '<tr><td colspan="9" class="empty-note">مفيش عمال مسجلين لسه</td></tr>';
     return;
   }
   tbody.innerHTML = '';
-  [...workers].reverse().forEach(w=>{
+  [...list].reverse().forEach(w=>{
     const advances = workerAdvancesTotal(w.id);
     const grantsBonuses = workerGrantsTotal(w.id) + workerBonusesTotal(w.id);
     const net = workerNetDue(w);
@@ -2539,6 +2686,11 @@ function openWorkerModal(worker){
   openModal('workerModal');
 }
 document.getElementById('addWorkerBtn').addEventListener('click', ()=>openWorkerModal(null));
+
+document.getElementById('workerSearchInput').addEventListener('input', e=>{
+  state.workerSearchTerm = e.target.value;
+  renderWorkersView();
+});
 
 document.getElementById('saveWorkerBtn').addEventListener('click', ()=>{
   const name = document.getElementById('workerName').value.trim();
@@ -2902,14 +3054,127 @@ document.getElementById('workerMonthDetailBackBtn').addEventListener('click', ()
 
 /* =========================================================
    EXPENSES (المصاريف)
-   No manual entry page anymore — expenses are computed
-   automatically from two sources only:
-   1) Supplier/purchase payments  → logSupplierExpense()
-   2) Worker advances + salary settlements → logWorkerExpense()
-   Both push into the same DB.EXPENSES ledger (with shiftId of
-   whichever shift was open at the time), so shift cash
-   reconciliation and reports keep working unchanged.
+   Two sources feed the same DB.EXPENSES ledger:
+   1) Automatic: supplier/purchase payments → logSupplierExpense()
+      and worker advances/salary settlements → logWorkerExpense()
+   2) Manual: "المصروفات اليومية" page below, for day-to-day
+      cash-out items (rent/bills/maintenance/marketing/other).
+   All entries carry shiftId of whichever shift was open when
+   logged, so shift cash reconciliation and reports keep working
+   unchanged regardless of source.
    ========================================================= */
+const MANUAL_EXPENSE_CATEGORIES = ['rent','bills','maintenance','marketing','other'];
+
+// Which date-range chip is selected on the المصروفات اليومية page.
+state.expenseDateFilter = state.expenseDateFilter || 'today';
+
+function inExpenseDateFilter(dateStr){
+  if(state.expenseDateFilter==='all') return true;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const cutDays = state.expenseDateFilter==='today' ? 0 : state.expenseDateFilter==='week' ? 7 : 30;
+  const start = new Date(now); start.setDate(start.getDate()-cutDays); start.setHours(0,0,0,0);
+  return d >= start;
+}
+
+document.querySelectorAll('#expenseDateFilter .chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>{
+    document.querySelectorAll('#expenseDateFilter .chip').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    state.expenseDateFilter = chip.dataset.efilter;
+    renderDailyExpensesView();
+  });
+});
+
+function renderDailyExpensesView(){
+  const tbody = document.getElementById('dailyExpensesTableBody');
+  let expenses = DB.getExpenses()
+    .filter(e=> inExpenseDateFilter(e.date))
+    .sort((a,b)=> new Date(b.date)-new Date(a.date));
+
+  const term = state.expenseSearchTerm.trim().toLowerCase();
+  if(term){
+    expenses = expenses.filter(e=>{
+      const catLabel = EXPENSE_CATEGORY_LABELS[e.category] || e.category || '';
+      return (e.note||'').toLowerCase().includes(term) || catLabel.toLowerCase().includes(term);
+    });
+  }
+
+  document.getElementById('expenseTotalStat').textContent = money(expenses.reduce((s,e)=>s+e.amount,0));
+  document.getElementById('expenseCountStat').textContent = expenses.length;
+
+  if(!expenses.length){
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش مصروفات في الفترة دي</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  expenses.forEach(e=>{
+    const catLabel = EXPENSE_CATEGORY_LABELS[e.category] || e.category || '—';
+    const isManual = MANUAL_EXPENSE_CATEGORIES.includes(e.category);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono">${new Date(e.date).toLocaleDateString('ar-EG')}</td>
+      <td>${escapeHtml(catLabel)}</td>
+      <td>${escapeHtml(e.note||'—')}</td>
+      <td class="mono">${money(e.amount)}</td>
+      <td>${escapeHtml(e.createdByName||'—')}</td>
+      <td>${isManual ? '<div class="row-actions"><button class="icon-btn" title="حذف">🗑️</button></div>' : ''}</td>`;
+    if(isManual){
+      tr.querySelector('[title="حذف"]').onclick = ()=>{
+        if(confirm('تأكيد حذف المصروف ده؟')){
+          DB.saveExpenses(DB.getExpenses().filter(x=>x.id!==e.id));
+          renderDailyExpensesView();
+        }
+      };
+    }
+    tbody.appendChild(tr);
+  });
+}
+
+document.getElementById('expenseSearchInput').addEventListener('input', e=>{
+  state.expenseSearchTerm = e.target.value;
+  renderDailyExpensesView();
+});
+
+document.getElementById('addExpenseBtn').addEventListener('click', ()=>{
+  document.getElementById('expenseCategorySelect').value = 'other';
+  document.getElementById('expenseNote').value = '';
+  document.getElementById('expenseAmount').value = '';
+  const today = new Date();
+  document.getElementById('expenseDate').value = today.toISOString().slice(0,10);
+  openModal('expenseModal');
+});
+
+document.getElementById('confirmAddExpenseBtn').addEventListener('click', ()=>{
+  const category = document.getElementById('expenseCategorySelect').value;
+  const note = document.getElementById('expenseNote').value.trim();
+  const amount = parseFloat(document.getElementById('expenseAmount').value);
+  const dateVal = document.getElementById('expenseDate').value;
+  if(!amount || amount<=0){ showToast('اكتب مبلغ صحيح'); return; }
+  if(!dateVal){ showToast('اختار التاريخ'); return; }
+
+  const cashier = AUTH.currentUser();
+  const todayStr = new Date().toISOString().slice(0,10);
+  // Keep the real time-of-day when logging for today, so it lines up
+  // correctly with shift ordering; otherwise anchor at midday.
+  const isoDate = dateVal===todayStr ? new Date().toISOString() : new Date(dateVal+'T12:00:00').toISOString();
+
+  const expenses = DB.getExpenses();
+  expenses.push({
+    id: uid('exp'),
+    date: isoDate,
+    category,
+    amount,
+    note,
+    shiftId: getActiveShift() ? getActiveShift().id : null,
+    createdBy: cashier?.id || null,
+    createdByName: cashier?.name || ''
+  });
+  DB.saveExpenses(expenses);
+  closeModal('expenseModal');
+  showToast('اتسجل المصروف');
+  renderDailyExpensesView();
+});
 
 /* =========================================================
    INVENTORY VIEW
@@ -3016,14 +3281,28 @@ function renderInventory(){
   const tbody = document.getElementById('inventoryTableBody');
   tbody.innerHTML = '';
 
+  // Stats always reflect the full inventory, not just the filtered/search rows below.
   let totalUnits = 0, lowStock = 0, stockValue = 0;
-
   products.forEach(p=>{
     const stock = totalStock(p);
     totalUnits += stock;
     stockValue += stock * (p.cost||0);
     if(stock>0 && stock<=3) lowStock++;
+  });
 
+  const term = state.inventorySearchTerm.trim().toLowerCase();
+  const list = term
+    ? products.filter(p=>
+        (p.name||'').toLowerCase().includes(term) || (p.sku||'').toLowerCase().includes(term) ||
+        (p.brand||'').toLowerCase().includes(term) || (p.category||'').toLowerCase().includes(term))
+    : products;
+
+  if(!list.length){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-note">مفيش أصناف مطابقة</td></tr>';
+  }
+
+  list.forEach(p=>{
+    const stock = totalStock(p);
     const sizeTags = p.variants.map(v=>
       `<span class="size-tag ${v.qty<=2?'low':''}">${escapeHtml(v.size)}${v.color?'·'+escapeHtml(v.color):''}: ${v.qty}</span>`
     ).join('');
@@ -3064,6 +3343,11 @@ function renderInventory(){
   document.getElementById('statLowStock').textContent = lowStock;
   document.getElementById('statStockValue').textContent = money(stockValue);
 }
+
+document.getElementById('inventorySearchInput').addEventListener('input', e=>{
+  state.inventorySearchTerm = e.target.value;
+  renderInventory();
+});
 
 /* ---- Restock by barcode scan (المخزون) ---- */
 const restockScanBtn = document.getElementById('restockScanBtn');
@@ -3526,12 +3810,18 @@ function renderReports(){
 }
 
 /* Orders shown in "سجل الفواتير": normally the same date-range-filtered
-   list as the rest of the report, but typing an invoice number searches
-   across ALL invoices regardless of the selected date range, so a cashier
-   can find an old invoice without first guessing/changing the range. */
+   list as the rest of the report, but typing something here searches
+   across ALL invoices regardless of the selected date range (by invoice
+   number, customer/contact name, or phone number), so a cashier can find
+   an old invoice without first guessing/changing the range. */
 function ordersForTable(){
-  const q = (document.getElementById('orderNumberSearch').value||'').trim();
-  if(q) return DB.getOrders().filter(o=> String(o.number).includes(q));
+  const q = (document.getElementById('orderNumberSearch').value||'').trim().toLowerCase();
+  if(q) return DB.getOrders().filter(o=>
+    String(o.number).includes(q) ||
+    (o.customerName && o.customerName.toLowerCase().includes(q)) ||
+    (o.contactName && o.contactName.toLowerCase().includes(q)) ||
+    (o.customerPhone && o.customerPhone.includes(q)) ||
+    (o.contactPhone && o.contactPhone.includes(q)));
   return filteredOrders();
 }
 document.getElementById('orderNumberSearch').addEventListener('input', ()=>{
@@ -3635,16 +3925,27 @@ function renderOrdersTable(orders){
   const tbody = document.getElementById('ordersTableBody');
   const isSearching = !!(document.getElementById('orderNumberSearch').value||'').trim();
   if(!orders.length){
-    tbody.innerHTML = `<tr><td colspan="6" class="empty-note">${isSearching ? 'مفيش فاتورة برقم كده' : 'مفيش فواتير في الفترة دي'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-note">${isSearching ? 'مفيش فاتورة باسم أو رقم تليفون كده' : 'مفيش فواتير في الفترة دي'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
   [...orders].reverse().forEach(o=>{
     const dt = new Date(o.date);
     const tr = document.createElement('tr');
+    // Show whoever the phone/name search actually matched: the person
+    // (عميل) who received the invoice when we have one, otherwise the
+    // متعامل — so a phone search shows the phone's owner, not just a total.
+    let customerCell = '—';
+    if(o.contactName){
+      customerCell = `<div>👤 ${escapeHtml(o.contactName)}${o.contactPhone ? '<span class="mono" style="color:var(--text-dim);"> — '+escapeHtml(o.contactPhone)+'</span>' : ''}</div>`;
+      if(o.customerName) customerCell += `<div style="font-size:11px;color:var(--text-dim);">🏢 ${escapeHtml(o.customerName)}</div>`;
+    } else if(o.customerName){
+      customerCell = `🏢 ${escapeHtml(o.customerName)}`;
+    }
     tr.innerHTML = `
       <td class="mono">#${o.number}</td>
       <td>${dt.toLocaleDateString('ar-EG')} ${dt.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}</td>
+      <td>${customerCell}</td>
       <td class="mono">${o.items.reduce((a,i)=>a+i.qty,0)}</td>
       <td class="mono">${money(o.total)}</td>
       <td>${paymentMethodLabel(o.method)}</td>

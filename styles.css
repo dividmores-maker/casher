@@ -1132,6 +1132,7 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 .top-count{font-size:12px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;}
 
 .empty-note{padding:20px;text-align:center;color:var(--text-dim);font-size:13px;}
+.empty-note.hidden{display:none;}
 
 /* ===== Settings ===== */
 .settings-form{
@@ -1365,6 +1366,20 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 .variant-remove{
   background:none;border:none;color:var(--danger);cursor:pointer;font-size:14px;
 }
+
+/* ---- Person match cards: when a phone/name search on the customers page
+   or the picker matches a specific عميل (person), not just a متعامل. ---- */
+.customer-people-matches{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
+.customer-people-matches.hidden{display:none;}
+.person-match-card{
+  display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:12px 16px;border:1px solid var(--violet);border-radius:10px;
+  background:var(--leather-tint);
+}
+.person-match-info{display:flex;flex-direction:column;gap:2px;}
+.person-match-name{font-weight:700;font-size:14px;}
+.person-match-meta{font-size:12px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;}
+.person-match-stats{font-size:12px;color:var(--text-dim);}
 
 .picker-options{display:flex;flex-direction:column;gap:8px;}
 .picker-option{
