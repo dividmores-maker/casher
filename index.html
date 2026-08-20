@@ -378,6 +378,7 @@
               <th>التاريخ</th>
               <th>النوع</th>
               <th>البيان</th>
+              <th>ملاحظة</th>
               <th>المبلغ</th>
               <th>بواسطة</th>
               <th></th>
@@ -1264,11 +1265,13 @@
         <label>إجمالي قيمة الشراء</label>
         <input type="number" id="purchaseAmount" min="0" step="0.01" placeholder="0.00">
       </div>
-      <div class="form-field">
-        <label>مدفوع دلوقتي (اختياري — سيب فارغ لو آجل بالكامل)</label>
-        <input type="number" id="purchaseDownPayment" min="0" step="0.01" value="0">
+      <div id="purchaseDownPaymentWrap">
+        <div class="form-field">
+          <label>مدفوع دلوقتي (اختياري — سيب فارغ لو آجل بالكامل)</label>
+          <input type="number" id="purchaseDownPayment" min="0" step="0.01" value="0">
+        </div>
+        <div class="credit-remaining-line" id="purchaseRemainingPreview"></div>
       </div>
-      <div class="credit-remaining-line" id="purchaseRemainingPreview"></div>
 
       <div class="variants-section" style="margin-top:14px;">
         <div class="variants-head">
@@ -1325,6 +1328,9 @@
       <div class="contact-search-summary hidden" id="purchaseDetailPaymentsEmpty"></div>
       <div class="picker-options" id="purchaseDetailPayments"></div>
     </div>
+    <div class="modal-foot" data-admin-only>
+      <button class="btn-ghost" id="editPurchaseBtn">✏️ تعديل الفاتورة</button>
+    </div>
   </div>
 </div>
 
@@ -1354,9 +1360,13 @@
         <label>المبلغ</label>
         <input type="number" id="expenseAmount" min="0" step="0.01" placeholder="0.00">
       </div>
-      <div class="form-field">
+      <div class="form-field" style="margin-bottom:14px;">
         <label>التاريخ</label>
         <input type="date" id="expenseDate">
+      </div>
+      <div class="form-field">
+        <label>ملاحظة</label>
+        <input type="text" id="expenseRemark" placeholder="أي ملاحظة إضافية (اختياري)">
       </div>
     </div>
     <div class="modal-foot">

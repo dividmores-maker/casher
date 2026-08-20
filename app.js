@@ -335,6 +335,7 @@ let state = {
   reportRangeFrom: null,
   reportRangeTo: null,
   editPurchaseItems: [], // used while purchase modal open
+  editingPurchaseId: null, // set when purchase modal is open in "edit existing purchase" mode
   editSizeGroups: [], // used while product modal open
   editGroup: null,      // used while product modal open
   editUserRole: null,    // used while user modal open
@@ -2253,6 +2254,7 @@ function renderPurchasesView(){
     return;
   }
   tbody.innerHTML = '';
+  const isAdminUser = AUTH.isAdmin();
   [...list].reverse().forEach(p=>{
     const dt = new Date(p.date);
     const paid = purchasePaidTotal(p);
@@ -2269,11 +2271,15 @@ function renderPurchasesView(){
       <td class="mono">${money(remaining)}</td>
       <td><span class="credit-status ${settled?'settled':'open'}">${settled?'✓ اتسدد':'مستحق'}</span></td>
       <td>
-        <button class="icon-btn" title="عرض التفاصيل">👁️</button>
-        ${settled ? '' : '<button class="icon-btn" title="تسجيل دفعة">💵</button>'}
+        <button class="icon-btn" data-action="view" title="عرض التفاصيل">👁️</button>
+        ${settled ? '' : '<button class="icon-btn" data-action="pay" title="تسجيل دفعة">💵</button>'}
+        ${isAdminUser ? '<button class="icon-btn" data-action="edit" title="تعديل الفاتورة">✏️</button>' : ''}
       </td>`;
-    tr.querySelectorAll('.icon-btn')[0].onclick = ()=>openPurchaseDetailModal(p.id);
-    if(!settled) tr.querySelectorAll('.icon-btn')[1].onclick = ()=>openPurchasePaymentModal(p.id);
+    tr.querySelector('[data-action="view"]').onclick = ()=>openPurchaseDetailModal(p.id);
+    const payBtn = tr.querySelector('[data-action="pay"]');
+    if(payBtn) payBtn.onclick = ()=>openPurchasePaymentModal(p.id);
+    const editBtn = tr.querySelector('[data-action="edit"]');
+    if(editBtn) editBtn.onclick = ()=>openEditPurchaseModal(p);
     tbody.appendChild(tr);
   });
 }
@@ -2456,6 +2462,11 @@ document.getElementById('purchaseDownPayment').addEventListener('input', updateP
 
 document.getElementById('addPurchaseBtn').addEventListener('click', ()=>{
   if(!DB.getSuppliers().length){ showToast('ضيف مورد الأول من زرار «الموردين»'); return; }
+  state.editingPurchaseId = null;
+  document.querySelector('#purchaseModal .modal-head h2').textContent = '🚚 عملية شراء جديدة';
+  document.getElementById('confirmPurchaseBtn').textContent = 'تسجيل عملية الشراء';
+  document.getElementById('purchaseSupplierSelect').disabled = false;
+  document.getElementById('purchaseDownPaymentWrap').classList.remove('hidden');
   populatePurchaseSupplierSelect();
   document.getElementById('purchaseNote').value = '';
   document.getElementById('purchaseAmount').value = '';
@@ -2465,6 +2476,29 @@ document.getElementById('addPurchaseBtn').addEventListener('click', ()=>{
   updatePurchasePreview();
   openModal('purchaseModal');
 });
+
+/* Admin-only: edit an existing purchase invoice (supplier, note, amount,
+   line items). Payments already recorded are left untouched — use the
+   "تسجيل دفعة" flow for those. */
+function openEditPurchaseModal(purchase){
+  state.editingPurchaseId = purchase.id;
+  document.querySelector('#purchaseModal .modal-head h2').textContent = '✏️ تعديل عملية الشراء';
+  document.getElementById('confirmPurchaseBtn').textContent = 'حفظ التعديل';
+  populatePurchaseSupplierSelect();
+  document.getElementById('purchaseSupplierSelect').value = purchase.supplierId;
+  document.getElementById('purchaseSupplierSelect').disabled = false;
+  document.getElementById('purchaseNote').value = purchase.note || '';
+  document.getElementById('purchaseAmount').value = purchase.amount;
+  document.getElementById('purchaseDownPayment').value = 0;
+  // Editing changes the invoice itself, not the money already paid toward
+  // it — hide the down-payment field so it can't be confused with that.
+  document.getElementById('purchaseDownPaymentWrap').classList.add('hidden');
+  state.editPurchaseItems = (purchase.items || []).map(it=>({...it}));
+  renderPurchaseItemRows();
+  updatePurchasePreview();
+  closeModal('purchaseDetailModal');
+  openModal('purchaseModal');
+}
 
 /* ---- Purchase invoice line items (النوع / اللون / الكمية / السعر) ---- */
 function renderPurchaseItemRows(){
@@ -2531,12 +2565,32 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
   const amount = Math.max(0, Number(document.getElementById('purchaseAmount').value) || 0);
   if(amount <= 0){ showToast('اكتب إجمالي قيمة الشراء'); return; }
   const note = document.getElementById('purchaseNote').value.trim();
-  const down = Math.min(amount, Math.max(0, Number(document.getElementById('purchaseDownPayment').value) || 0));
 
   const items = state.editPurchaseItems
     .filter(it=>it.type.trim()!=='')
     .map(it=>({id:it.id||uid('pit'), type:it.type.trim(), size:it.size.trim()||'—', color:it.color.trim()||'—', qty:Math.max(0,it.qty||0), price:Math.max(0,it.price||0)}));
 
+  if(state.editingPurchaseId){
+    if(!AUTH.isAdmin()){ showToast('تعديل الفواتير متاح للأدمن بس'); return; }
+    const list = DB.getPurchases();
+    const idx = list.findIndex(p=>p.id===state.editingPurchaseId);
+    if(idx===-1){ showToast('عملية الشراء دي مش موجودة'); closeModal('purchaseModal'); return; }
+    const existing = list[idx];
+    const paid = purchasePaidTotal(existing);
+    if(amount < paid - 0.01){
+      if(!confirm(`المبلغ المدفوع فعلاً (${money(paid)}) أكبر من الإجمالي الجديد. تكمل التعديل؟`)) return;
+    }
+    list[idx] = { ...existing, supplierId: supplier.id, supplierName: supplier.name, supplierPhone: supplier.phone || '', amount, note, items };
+    DB.savePurchases(list);
+    state.editingPurchaseId = null;
+    closeModal('purchaseModal');
+    showToast('تم تعديل عملية الشراء');
+    renderPurchasesView();
+    refreshShiftBadge();
+    return;
+  }
+
+  const down = Math.min(amount, Math.max(0, Number(document.getElementById('purchaseDownPayment').value) || 0));
   const cashier = AUTH.currentUser();
   const activeShift = getActiveShift();
   const purchase = {
@@ -2659,6 +2713,9 @@ function openPurchaseDetailModal(purchaseId){
       paymentsWrap.appendChild(row);
     });
   }
+  const editBtn = document.getElementById('editPurchaseBtn');
+  if(editBtn) editBtn.onclick = ()=> openEditPurchaseModal(purchase);
+
   openModal('purchaseDetailModal');
 }
 
@@ -3172,7 +3229,7 @@ function renderDailyExpensesView(){
   if(term){
     expenses = expenses.filter(e=>{
       const catLabel = EXPENSE_CATEGORY_LABELS[e.category] || e.category || '';
-      return (e.note||'').toLowerCase().includes(term) || catLabel.toLowerCase().includes(term);
+      return (e.note||'').toLowerCase().includes(term) || (e.remark||'').toLowerCase().includes(term) || catLabel.toLowerCase().includes(term);
     });
   }
 
@@ -3180,25 +3237,46 @@ function renderDailyExpensesView(){
   document.getElementById('expenseCountStat').textContent = expenses.length;
 
   if(!expenses.length){
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-note">مفيش مصروفات في الفترة دي</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-note">مفيش مصروفات في الفترة دي</td></tr>';
     return;
   }
   tbody.innerHTML = '';
+  const isAdminUser = AUTH.isAdmin();
   expenses.forEach(e=>{
     const catLabel = EXPENSE_CATEGORY_LABELS[e.category] || e.category || '—';
     const isManual = MANUAL_EXPENSE_CATEGORIES.includes(e.category);
     const tr = document.createElement('tr');
+    const actions = [];
+    if(isManual && isAdminUser) actions.push('<button class="icon-btn" data-action="edit" title="تعديل المصروف">✏️</button>');
+    else if(isAdminUser) actions.push('<button class="icon-btn" data-action="edit-remark" title="تعديل الملاحظة">✏️</button>');
+    if(isManual) actions.push('<button class="icon-btn" data-action="delete" title="حذف">🗑️</button>');
     tr.innerHTML = `
       <td class="mono">${new Date(e.date).toLocaleDateString('ar-EG')}</td>
       <td>${escapeHtml(catLabel)}</td>
       <td>${escapeHtml(e.note||'—')}</td>
+      <td>${escapeHtml(e.remark||'—')}</td>
       <td class="mono">${money(e.amount)}</td>
       <td>${escapeHtml(e.createdByName||'—')}</td>
-      <td>${isManual ? '<div class="row-actions"><button class="icon-btn" title="حذف">🗑️</button></div>' : ''}</td>`;
+      <td>${actions.length ? `<div class="row-actions">${actions.join('')}</div>` : ''}</td>`;
     if(isManual){
-      tr.querySelector('[title="حذف"]').onclick = ()=>{
+      tr.querySelector('[data-action="delete"]').onclick = ()=>{
         if(confirm('تأكيد حذف المصروف ده؟')){
           DB.saveExpenses(DB.getExpenses().filter(x=>x.id!==e.id));
+          renderDailyExpensesView();
+        }
+      };
+    }
+    if(isManual && isAdminUser){
+      tr.querySelector('[data-action="edit"]').onclick = ()=> openEditExpenseModal(e);
+    } else if(isAdminUser){
+      tr.querySelector('[data-action="edit-remark"]').onclick = ()=>{
+        const updated = prompt('عدّل الملاحظة:', e.remark||'');
+        if(updated===null) return;
+        const all = DB.getExpenses();
+        const idx = all.findIndex(x=>x.id===e.id);
+        if(idx>-1){
+          all[idx].remark = updated.trim();
+          DB.saveExpenses(all);
           renderDailyExpensesView();
         }
       };
@@ -3213,35 +3291,67 @@ document.getElementById('expenseSearchInput').addEventListener('input', e=>{
 });
 
 document.getElementById('addExpenseBtn').addEventListener('click', ()=>{
+  state.editingExpenseId = null;
+  document.querySelector('#expenseModal .modal-head h2').textContent = '💸 إضافة مصروف';
+  document.getElementById('confirmAddExpenseBtn').textContent = 'حفظ المصروف';
   document.getElementById('expenseCategorySelect').value = 'other';
   document.getElementById('expenseNote').value = '';
   document.getElementById('expenseAmount').value = '';
+  document.getElementById('expenseRemark').value = '';
   const today = new Date();
   document.getElementById('expenseDate').value = today.toISOString().slice(0,10);
   openModal('expenseModal');
 });
 
+function openEditExpenseModal(exp){
+  state.editingExpenseId = exp.id;
+  document.querySelector('#expenseModal .modal-head h2').textContent = '✏️ تعديل المصروف';
+  document.getElementById('confirmAddExpenseBtn').textContent = 'حفظ التعديل';
+  document.getElementById('expenseCategorySelect').value = exp.category;
+  document.getElementById('expenseNote').value = exp.note || '';
+  document.getElementById('expenseAmount').value = exp.amount;
+  document.getElementById('expenseRemark').value = exp.remark || '';
+  document.getElementById('expenseDate').value = new Date(exp.date).toISOString().slice(0,10);
+  openModal('expenseModal');
+}
+
 document.getElementById('confirmAddExpenseBtn').addEventListener('click', ()=>{
   const category = document.getElementById('expenseCategorySelect').value;
   const note = document.getElementById('expenseNote').value.trim();
+  const remark = document.getElementById('expenseRemark').value.trim();
   const amount = parseFloat(document.getElementById('expenseAmount').value);
   const dateVal = document.getElementById('expenseDate').value;
   if(!amount || amount<=0){ showToast('اكتب مبلغ صحيح'); return; }
   if(!dateVal){ showToast('اختار التاريخ'); return; }
 
-  const cashier = AUTH.currentUser();
   const todayStr = new Date().toISOString().slice(0,10);
   // Keep the real time-of-day when logging for today, so it lines up
   // correctly with shift ordering; otherwise anchor at midday.
   const isoDate = dateVal===todayStr ? new Date().toISOString() : new Date(dateVal+'T12:00:00').toISOString();
 
   const expenses = DB.getExpenses();
+
+  if(state.editingExpenseId){
+    const idx = expenses.findIndex(x=>x.id===state.editingExpenseId);
+    if(idx>-1){
+      expenses[idx] = { ...expenses[idx], date: isoDate, category, amount, note, remark };
+    }
+    DB.saveExpenses(expenses);
+    state.editingExpenseId = null;
+    closeModal('expenseModal');
+    showToast('اتعدل المصروف');
+    renderDailyExpensesView();
+    return;
+  }
+
+  const cashier = AUTH.currentUser();
   expenses.push({
     id: uid('exp'),
     date: isoDate,
     category,
     amount,
     note,
+    remark,
     shiftId: getActiveShift() ? getActiveShift().id : null,
     createdBy: cashier?.id || null,
     createdByName: cashier?.name || ''

@@ -1194,6 +1194,7 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
   padding:20px;
 }
 .modal-overlay.hidden{display:none;}
+#purchaseDownPaymentWrap.hidden{display:none;}
 /* The receipt can be opened from on top of other open modals (customer
    detail, contact-points search, etc.) — make sure it always stacks above
    them instead of rendering underneath. */
