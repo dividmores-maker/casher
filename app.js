@@ -774,6 +774,9 @@ document.querySelectorAll('[data-close]').forEach(el=>{
   el.addEventListener('click', ()=>closeModal(el.dataset.close));
 });
 document.querySelectorAll('.modal-overlay').forEach(ov=>{
+  // الفاتورة النهائية (receiptModal) ما تتقفلش لو دُس بره الكارت بالغلط —
+  // لازم المستخدم يدوس ✕ أو "إغلاق" عشان تتقفل، عشان الفاتورة متختفيش قبل ما يخلص منها.
+  if(ov.id === 'receiptModal') return;
   ov.addEventListener('click', e=>{ if(e.target===ov) ov.classList.add('hidden'); });
 });
 
@@ -1141,11 +1144,18 @@ function cartCount(){
 
 function renderCart(){
   const wrap = document.getElementById('cartItems');
-  const emptyMsg = document.getElementById('emptyCartMsg');
 
   if(!state.cart.length){
-    wrap.innerHTML = '';
-    wrap.appendChild(emptyMsg);
+    // إعادة بناء رسالة "لسه مفيش أصناف" كل مرة بدل ما نعتمد على عنصر
+    // ثابت واحد — لأن wrap.innerHTML='' في أول ما السلة بتاخد صنف بتمسح
+    // العنصر الأصلي نهائيًا من الصفحة، وأي محاولة نرجّعه تاني بعد كده
+    // (لما السلة ترجع فاضية) بتفشل لأنه بقى مش موجود في الـ DOM خالص.
+    wrap.innerHTML = `
+      <div class="empty-cart" id="emptyCartMsg">
+        <div class="empty-cart-icon">🛒</div>
+        <div>لسه مفيش أصناف</div>
+        <div class="empty-cart-hint">دوس على منتج عشان تضيفه</div>
+      </div>`;
   } else {
     wrap.innerHTML = '';
     state.cart.forEach(item=>{
@@ -1439,13 +1449,31 @@ function goToContactStep(customer){
   document.getElementById('contactNameInput').value = '';
   document.getElementById('contactPhoneInput').value = '';
 
+  const searchBox = document.getElementById('contactChipsSearchBox');
+  const searchInput = document.getElementById('contactChipsSearch');
+  searchInput.value = '';
+  searchBox.classList.toggle('hidden', (customer.contacts||[]).length < 6);
+  renderContactChips(customer, '');
+
+  showCustomerPickerStep('contact');
+  setTimeout(()=>document.getElementById('contactNameInput').focus(), 50);
+}
+
+function renderContactChips(customer, term){
   const chipsWrap = document.getElementById('customerPickerContactChips');
   const contacts = customer.contacts || [];
+  const t = (term||'').trim().toLowerCase();
+  const filtered = t
+    ? contacts.filter(p => (p.name||'').toLowerCase().includes(t) || (p.phone||'').includes(t))
+    : contacts;
+
   if(!contacts.length){
     chipsWrap.innerHTML = '';
+  } else if(!filtered.length){
+    chipsWrap.innerHTML = '<div class="empty-note" style="padding:0 0 6px;">أشخاص سبق تسجيلهم لنفس المتعامل:</div><div class="empty-note">مفيش نتايج مطابقة للبحث</div>';
   } else {
     chipsWrap.innerHTML = '<div class="empty-note" style="padding:0 0 6px;">أشخاص سبق تسجيلهم لنفس المتعامل:</div>';
-    [...contacts].reverse().forEach(p=>{
+    [...filtered].reverse().forEach(p=>{
       const opt = document.createElement('div');
       opt.className = 'picker-option';
       opt.innerHTML = `
@@ -1455,10 +1483,10 @@ function goToContactStep(customer){
       chipsWrap.appendChild(opt);
     });
   }
-
-  showCustomerPickerStep('contact');
-  setTimeout(()=>document.getElementById('contactNameInput').focus(), 50);
 }
+document.getElementById('contactChipsSearch').addEventListener('input', e=>{
+  if(state.selectedCustomer) renderContactChips(state.selectedCustomer, e.target.value);
+});
 
 function confirmContact(name, phone){
   name = (name||'').trim();
@@ -1502,9 +1530,42 @@ document.querySelectorAll('.payment-option').forEach(btn=>{
       openCreditSaleModal();
       return;
     }
-    completeSale(btn.dataset.method);
     closeModal('paymentModal');
+    openSaleConfirmModal(btn.dataset.method);
   });
+});
+
+/* ---- Sale confirmation (cash / card / transfer): show amount + method +
+   المتعامل + العميل before actually recording the sale, so the cashier
+   can catch a mistake before it's final. ---- */
+let pendingSaleMethod = null;
+function openSaleConfirmModal(method){
+  pendingSaleMethod = method;
+  const subtotal = cartSubtotal();
+  const discount = Math.max(0, Number(document.getElementById('discountInput').value) || 0);
+  const total = Math.max(0, subtotal - discount);
+  const customerName = state.selectedCustomer ? state.selectedCustomer.name : '';
+  const contactName = state.selectedContact ? state.selectedContact.name : '';
+  const itemsHtml = state.cart.map(item => `
+    <div class="sale-confirm-item">
+      <span class="sale-confirm-item-name">${escapeHtml(item.name)} <span class="sale-confirm-item-meta">(${escapeHtml(item.size)}/${escapeHtml(item.color)})</span></span>
+      <span class="sale-confirm-item-qty">x${item.qty}</span>
+      <span class="sale-confirm-item-price mono">${money(item.price*item.qty)}</span>
+    </div>`).join('');
+
+  document.getElementById('saleConfirmSummary').innerHTML = `
+    <div class="sale-confirm-items">${itemsHtml}</div>
+    <div class="sale-confirm-row"><span>طريقة الدفع</span><span>${escapeHtml(paymentMethodLabel(method))}</span></div>
+    ${customerName ? `<div class="sale-confirm-row"><span>المتعامل</span><span>${escapeHtml(customerName)}</span></div>` : ''}
+    ${contactName ? `<div class="sale-confirm-row"><span>العميل</span><span>${escapeHtml(contactName)}</span></div>` : ''}
+    <div class="sale-confirm-row total"><span>المبلغ</span><span>${money(total)} ج.م</span></div>`;
+  openModal('saleConfirmModal');
+}
+document.getElementById('confirmSaleBtn').addEventListener('click', ()=>{
+  if(!pendingSaleMethod) return;
+  completeSale(pendingSaleMethod);
+  pendingSaleMethod = null;
+  closeModal('saleConfirmModal');
 });
 
 /* ---- Credit sale (بيع بالأجل): capture customer + optional down payment ---- */
@@ -1775,6 +1836,36 @@ function renderCustomerPeopleMatches(term){
 /* ---- Company detail page: النقاط + الأشخاص المسجلين تحتها + سجل فواتيرها (رقم الفاتورة/الاسم/النقاط)
    contactFilter (optional): {name, phone} — when given, the invoice list
    below is scoped to that specific person instead of the whole متعامل. ---- */
+let customerDetailCurrentId = null;
+function renderCustomerDetailContacts(c, term){
+  const contacts = c.contacts || [];
+  const contactsWrap = document.getElementById('customerDetailContactsList');
+  const t = (term||'').trim().toLowerCase();
+  const filtered = t
+    ? contacts.filter(p => (p.name||'').toLowerCase().includes(t) || (p.phone||'').includes(t))
+    : contacts;
+
+  if(!contacts.length){
+    contactsWrap.innerHTML = '<div class="empty-note">لسه مفيش أشخاص متسجلين تحت المتعامل ده</div>';
+  } else if(!filtered.length){
+    contactsWrap.innerHTML = '<div class="empty-note">مفيش نتايج مطابقة للبحث</div>';
+  } else {
+    contactsWrap.innerHTML = '';
+    [...filtered].reverse().forEach(p=>{
+      const chip = document.createElement('div');
+      chip.className = 'contact-chip clickable-row';
+      chip.title = 'دوس عشان تشوف فواتير وأرصدة نقط الشخص ده لوحده';
+      chip.innerHTML = `<span>👤 ${escapeHtml(p.name)}</span>${p.phone ? `<span class="mono">${escapeHtml(p.phone)}</span>` : ''}<span class="mono">🎁 ${p.points||0}</span>`;
+      chip.onclick = ()=> openCustomerDetailModal(c.id, p);
+      contactsWrap.appendChild(chip);
+    });
+  }
+}
+document.getElementById('customerDetailContactsSearch').addEventListener('input', e=>{
+  const c = DB.getCustomers().find(x=>x.id===customerDetailCurrentId);
+  if(c) renderCustomerDetailContacts(c, e.target.value);
+});
+
 function openCustomerDetailModal(customerId, contactFilter){
   const c = DB.getCustomers().find(x=>x.id===customerId);
   if(!c) return;
@@ -1806,21 +1897,12 @@ function openCustomerDetailModal(customerId, contactFilter){
       <div class="stat-value mono">${debt>0.01 ? money(debt) : '—'}</div>
     </div>`;
 
-  const contacts = c.contacts || [];
-  const contactsWrap = document.getElementById('customerDetailContactsList');
-  if(!contacts.length){
-    contactsWrap.innerHTML = '<div class="empty-note">لسه مفيش أشخاص متسجلين تحت المتعامل ده</div>';
-  } else {
-    contactsWrap.innerHTML = '';
-    [...contacts].reverse().forEach(p=>{
-      const chip = document.createElement('div');
-      chip.className = 'contact-chip clickable-row';
-      chip.title = 'دوس عشان تشوف فواتير وأرصدة نقط الشخص ده لوحده';
-      chip.innerHTML = `<span>👤 ${escapeHtml(p.name)}</span>${p.phone ? `<span class="mono">${escapeHtml(p.phone)}</span>` : ''}<span class="mono">🎁 ${p.points||0}</span>`;
-      chip.onclick = ()=> openCustomerDetailModal(c.id, p);
-      contactsWrap.appendChild(chip);
-    });
-  }
+  customerDetailCurrentId = c.id;
+  const contactsSearchBox = document.getElementById('customerDetailContactsSearchBox');
+  const contactsSearchInput = document.getElementById('customerDetailContactsSearch');
+  contactsSearchInput.value = '';
+  contactsSearchBox.classList.toggle('hidden', (c.contacts||[]).length < 6);
+  renderCustomerDetailContacts(c, '');
 
   const orders = contactFilter
     ? ordersForContact(c.id, contactFilter)
@@ -2438,6 +2520,112 @@ function renderSupplierLedger(supplierId){
   document.getElementById('supplierLedgerPaid').textContent = money(totalPaid);
   document.getElementById('supplierLedgerRemaining').textContent = money(totalRemaining);
 }
+
+/* ---- Collect payment from a supplier (تحصيل فلوس مورد) ----
+   Unlike the per-invoice "دفع" button on a single purchase row,
+   this lets the cashier pick a supplier and pay a lump sum that
+   gets distributed automatically across that supplier's open
+   invoices (oldest first / FIFO) until the amount is used up. */
+function suppliersWithDebt(){
+  return DB.getSuppliers()
+    .map(s=>({ ...s, debt: supplierDebtRemaining(s.id) }))
+    .filter(s=>s.debt > 0.01);
+}
+
+function populateCollectSupplierSelect(){
+  const select = document.getElementById('collectSupplierSelect');
+  const selectField = select.closest('.form-field');
+  const amountField = document.getElementById('collectSupplierAmount').closest('.form-field');
+  const emptyNote = document.getElementById('collectSupplierEmpty');
+  const confirmBtn = document.getElementById('confirmCollectSupplierPaymentBtn');
+  const withDebt = suppliersWithDebt();
+
+  if(!withDebt.length){
+    select.innerHTML = '';
+    document.getElementById('collectSupplierSummary').innerHTML = '';
+    document.getElementById('collectSupplierAmount').value = '';
+    selectField.classList.add('hidden');
+    amountField.classList.add('hidden');
+    emptyNote.classList.remove('hidden');
+    confirmBtn.disabled = true;
+    return;
+  }
+
+  selectField.classList.remove('hidden');
+  amountField.classList.remove('hidden');
+  emptyNote.classList.add('hidden');
+  confirmBtn.disabled = false;
+
+  const prev = select.value;
+  select.innerHTML = withDebt.map(s=>`<option value="${s.id}">${escapeHtml(s.name)} — مستحق ${money(s.debt)}</option>`).join('');
+  select.value = withDebt.some(s=>s.id===prev) ? prev : withDebt[0].id;
+  updateCollectSupplierSummary(select.value);
+}
+
+function updateCollectSupplierSummary(supplierId){
+  const supplier = DB.getSuppliers().find(s=>s.id===supplierId);
+  if(!supplier) return;
+  const openPurchases = DB.getPurchases().filter(p=>p.supplierId===supplierId && !purchaseIsSettled(p));
+  const debt = supplierDebtRemaining(supplierId);
+  document.getElementById('collectSupplierSummary').innerHTML = `
+    <div class="sum-row"><span>المورد</span><span class="mono">${escapeHtml(supplier.name)}</span></div>
+    <div class="sum-row"><span>عدد الفواتير المفتوحة</span><span class="mono">${openPurchases.length}</span></div>
+    <div class="sum-row total-row"><span>إجمالي المستحق عليه</span><span class="mono">${money(debt)}</span></div>`;
+  const amountInput = document.getElementById('collectSupplierAmount');
+  amountInput.value = debt.toFixed(2);
+  amountInput.max = debt;
+}
+
+document.getElementById('collectSupplierPaymentBtn').addEventListener('click', ()=>{
+  populateCollectSupplierSelect();
+  openModal('collectSupplierPaymentModal');
+});
+
+document.getElementById('collectSupplierSelect').addEventListener('change', e=>{
+  updateCollectSupplierSummary(e.target.value);
+});
+
+document.getElementById('confirmCollectSupplierPaymentBtn').addEventListener('click', ()=>{
+  const supplierId = document.getElementById('collectSupplierSelect').value;
+  if(!supplierId) return;
+  const supplier = DB.getSuppliers().find(s=>s.id===supplierId);
+  if(!supplier) return;
+  const debt = supplierDebtRemaining(supplierId);
+  let amount = Math.max(0, Number(document.getElementById('collectSupplierAmount').value) || 0);
+  if(amount <= 0){ showToast('اكتب مبلغ الدفعة'); return; }
+  if(amount > debt + 0.01){ showToast('المبلغ أكبر من إجمالي المستحق على المورد ده'); return; }
+  amount = Math.min(amount, debt);
+
+  const cashier = AUTH.currentUser();
+  const activeShift = getActiveShift();
+  const list = DB.getPurchases();
+  // Oldest open invoice first (FIFO) — the payment covers each
+  // invoice's remaining balance in turn until it runs out.
+  const openOnes = list
+    .filter(p=>p.supplierId===supplierId && !purchaseIsSettled(p))
+    .sort((a,b)=> new Date(a.date) - new Date(b.date));
+
+  let left = amount;
+  openOnes.forEach(p=>{
+    if(left <= 0.01) return;
+    const remaining = purchaseRemaining(p);
+    const pay = Math.min(remaining, left);
+    if(pay <= 0.01) return;
+    p.payments = p.payments || [];
+    p.payments.push({
+      id: uid('pay'), date: new Date().toISOString(), amount: pay,
+      shiftId: activeShift ? activeShift.id : null,
+      byId: cashier?.id || null, byName: cashier?.name || ''
+    });
+    left -= pay;
+  });
+  DB.savePurchases(list);
+  logSupplierExpense(amount, supplier.name, 'تحصيل مجمّع لعدة فواتير');
+  closeModal('collectSupplierPaymentModal');
+  showToast('تم تسجيل الدفعة للمورد');
+  renderPurchasesView();
+  refreshShiftBadge();
+});
 
 /* ---- New purchase ---- */
 function populatePurchaseSupplierSelect(){
@@ -3992,7 +4180,9 @@ function renderReports(){
   renderDailyChart(orders);
   renderTopProducts(orders);
   renderOrdersTable(ordersForTable());
-  renderExpensesTable();
+  renderExpenseBreakdown();
+  renderTopSupplier();
+  renderExpensesTable(expensesForTable());
 }
 
 /* Orders shown in "سجل الفواتير": normally the same date-range-filtered
@@ -4019,15 +4209,31 @@ const EXPENSE_CATEGORY_LABELS = {
   maintenance: '🔧 صيانة', marketing: '📣 تسويق', other: '📦 أخرى'
 };
 
-function renderExpensesTable(){
+/* Same "search overrides the date range" pattern as ordersForTable():
+   typing in the expenses search box looks across ALL expenses by
+   category or note, regardless of the selected report range. */
+function expensesForTable(){
+  const q = (document.getElementById('reportExpenseSearchInput').value||'').trim().toLowerCase();
+  if(q) return DB.getExpenses().filter(e=>{
+    const catLabel = (EXPENSE_CATEGORY_LABELS[e.category] || e.category || '').toLowerCase();
+    return catLabel.includes(q) || (e.note && e.note.toLowerCase().includes(q));
+  });
+  return expensesForReportRange();
+}
+document.getElementById('reportExpenseSearchInput').addEventListener('input', ()=>{
+  renderExpensesTable(expensesForTable());
+});
+
+function renderExpensesTable(expenses){
   const tbody = document.getElementById('expensesTableBody');
-  const expenses = [...expensesForReportRange()].sort((a,b)=>new Date(b.date)-new Date(a.date));
-  if(!expenses.length){
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-note">مفيش مصروفات في الفترة دي</td></tr>';
+  const isSearching = !!(document.getElementById('reportExpenseSearchInput').value||'').trim();
+  const sorted = [...expenses].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  if(!sorted.length){
+    tbody.innerHTML = `<tr><td colspan="4" class="empty-note">${isSearching ? 'مفيش مصروفات كده' : 'مفيش مصروفات في الفترة دي'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
-  expenses.forEach(e=>{
+  sorted.forEach(e=>{
     const tr = document.createElement('tr');
     const catLabel = EXPENSE_CATEGORY_LABELS[e.category] || e.category || '—';
     tr.innerHTML = `
@@ -4037,6 +4243,58 @@ function renderExpensesTable(){
       <td class="mono">${money(e.amount)}</td>`;
     tbody.appendChild(tr);
   });
+}
+
+/* "فلوسي اتصرفت في إيه" — total spent per expense category within
+   the selected report range, highest first, so it's clear at a
+   glance where the money went (rent vs suppliers vs workers etc). */
+function renderExpenseBreakdown(){
+  const expenses = expensesForReportRange();
+  const totals = {};
+  expenses.forEach(e=>{ totals[e.category] = (totals[e.category]||0) + e.amount; });
+  const list = document.getElementById('expenseBreakdownList');
+  const sorted = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  if(!sorted.length){
+    list.innerHTML = '<div class="empty-note">مفيش مصروفات في الفترة دي</div>';
+    return;
+  }
+  list.innerHTML = '';
+  sorted.forEach(([category, total], idx)=>{
+    const row = document.createElement('div');
+    row.className = 'top-row';
+    row.innerHTML = `
+      <span class="top-rank">${idx+1}</span>
+      <span class="top-name">${escapeHtml(EXPENSE_CATEGORY_LABELS[category] || category)}</span>
+      <span class="top-count mono">${money(total)}</span>`;
+    list.appendChild(row);
+  });
+}
+
+/* "أكتر مورد اتعملت معاه" — the supplier with the highest purchase
+   total within the selected report range: how many invoices, how
+   much was bought from them in that period, and (separately, since
+   this isn't range-bound) how much is currently still owed to them. */
+function renderTopSupplier(){
+  const purchasesInRange = DB.getPurchases().filter(p=> inReportRange(p.date));
+  const box = document.getElementById('topSupplierSummary');
+  if(!purchasesInRange.length){
+    box.innerHTML = '<div class="empty-note">مفيش عمليات شراء في الفترة دي</div>';
+    return;
+  }
+  const bySupplier = {};
+  purchasesInRange.forEach(p=>{
+    const key = p.supplierId || p.supplierName;
+    if(!bySupplier[key]) bySupplier[key] = { name: p.supplierName||'—', total: 0, count: 0, supplierId: p.supplierId };
+    bySupplier[key].total += p.amount;
+    bySupplier[key].count += 1;
+  });
+  const top = Object.values(bySupplier).sort((a,b)=>b.total-a.total)[0];
+  const debt = top.supplierId ? supplierDebtRemaining(top.supplierId) : 0;
+  box.innerHTML = `
+    <div class="sum-row"><span>المورد</span><span class="mono">${escapeHtml(top.name)}</span></div>
+    <div class="sum-row"><span>عدد عمليات الشراء في الفترة دي</span><span class="mono">${top.count}</span></div>
+    <div class="sum-row"><span>إجمالي الشراء منه في الفترة دي</span><span class="mono">${money(top.total)}</span></div>
+    <div class="sum-row total-row"><span>المستحق عليه حاليًا</span><span class="mono">${money(debt)}</span></div>`;
 }
 
 function renderDailyChart(orders){

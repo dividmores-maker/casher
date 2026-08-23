@@ -445,6 +445,17 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 
 .credit-remaining-line{margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.05);font-size:13px;color:var(--text-dim);text-align:center;}
 .credit-remaining-line strong{color:var(--text);}
+.sale-confirm-summary{display:flex;flex-direction:column;gap:10px;}
+.sale-confirm-items{display:flex;flex-direction:column;gap:6px;margin-bottom:2px;}
+.sale-confirm-item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);font-size:13px;}
+.sale-confirm-item-name{color:var(--text);flex:1;}
+.sale-confirm-item-meta{color:var(--text-dim);font-size:12px;}
+.sale-confirm-item-qty{color:var(--text-dim);white-space:nowrap;}
+.sale-confirm-item-price{color:var(--text);white-space:nowrap;}
+.sale-confirm-row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.05);font-size:14px;}
+.sale-confirm-row span:first-child{color:var(--text-dim);}
+.sale-confirm-row span:last-child{color:var(--text);font-weight:600;}
+.sale-confirm-row.total span:last-child{color:var(--violet);font-size:17px;}
 
 .ticket-customer{padding:10px 12px;margin:0 0 4px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}
 .ticket-customer-pick{background:none;border:none;color:var(--violet);font-weight:700;font-size:13px;cursor:pointer;padding:2px;}

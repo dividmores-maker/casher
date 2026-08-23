@@ -293,6 +293,7 @@
         <div class="view-header-actions">
           <button class="btn-ghost" id="manageSuppliersBtn">🚚 الموردين</button>
           <button class="btn-ghost" id="supplierLedgerBtn">📋 سجل الموردين</button>
+          <button class="btn-ghost" id="collectSupplierPaymentBtn">💰 تحصيل فلوس مورد</button>
           <button class="btn-primary" id="addPurchaseBtn">+ عملية شراء جديدة</button>
         </div>
       </div>
@@ -549,6 +550,17 @@
         </div>
       </div>
 
+      <div class="report-grid">
+        <div class="report-panel">
+          <h3>فلوسي اتصرفت في إيه — حسب النوع</h3>
+          <div class="top-list" id="expenseBreakdownList"></div>
+        </div>
+        <div class="report-panel">
+          <h3>🚚 أكتر مورد اتعملت معاه</h3>
+          <div class="shift-summary" id="topSupplierSummary"></div>
+        </div>
+      </div>
+
       <div class="report-panel">
         <div class="report-panel-header">
           <h3>سجل الفواتير</h3>
@@ -573,7 +585,10 @@
       </div>
 
       <div class="report-panel">
-        <h3>تفاصيل المصروفات — أنا صرفت إيه</h3>
+        <div class="report-panel-header">
+          <h3>تفاصيل المصروفات — أنا صرفت إيه</h3>
+          <input type="text" id="reportExpenseSearchInput" class="order-number-search" placeholder="🔍 دور بنوع المصروف أو البيان...">
+        </div>
         <div class="orders-table-wrap">
           <table class="inventory-table" id="expensesTable">
             <thead>
@@ -927,6 +942,23 @@
   </div>
 </div>
 
+<!-- Sale Confirm Modal (shown after choosing cash/card/transfer, before the sale is actually recorded) -->
+<div class="modal-overlay hidden" id="saleConfirmModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>تأكيد البيع</h2>
+      <button class="modal-close" data-close="saleConfirmModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="sale-confirm-summary" id="saleConfirmSummary"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="saleConfirmModal">إلغاء</button>
+      <button class="btn-primary" id="confirmSaleBtn">تأكيد وإتمام البيع</button>
+    </div>
+  </div>
+</div>
+
 <!-- Credit Sale Customer Info Modal (shown when "بيع بالأجل" is chosen at checkout) -->
 <div class="modal-overlay hidden" id="creditSaleModal">
   <div class="modal modal-sm">
@@ -1044,6 +1076,10 @@
         <button class="ticket-customer-pick" id="customerPickerBackBtn" style="margin-bottom:10px;">→ رجوع لاختيار متعامل تاني</button>
         <div class="customer-picker-company-badge" id="customerPickerCompanyBadge"></div>
 
+        <div class="search-box hidden" id="contactChipsSearchBox" style="margin-top:10px;">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="contactChipsSearch" placeholder="دور بالاسم أو رقم التليفون...">
+        </div>
         <div class="picker-options" id="customerPickerContactChips" style="margin:10px 0;"></div>
 
         <div class="form-field" style="margin-bottom:14px;">
@@ -1099,6 +1135,10 @@
       <div class="report-stats" id="customerDetailStats"></div>
 
       <h3 class="customer-detail-subhead">الأشخاص المسجلين تحت المتعامل ده</h3>
+      <div class="search-box hidden" id="customerDetailContactsSearchBox" style="margin-bottom:8px;">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="customerDetailContactsSearch" placeholder="دور بالاسم أو رقم التليفون...">
+      </div>
       <div class="customer-contacts-list" id="customerDetailContactsList"></div>
 
       <h3 class="customer-detail-subhead" id="customerDetailOrdersHead">سجل الفواتير</h3>
@@ -1427,6 +1467,32 @@
         </div>
       </div>
       <div class="empty-note hidden" id="supplierLedgerEmpty">لا يوجد موردين مسجلين لسه — ضيف مورد الأول</div>
+    </div>
+  </div>
+</div>
+
+<!-- Collect Supplier Payment Modal (تحصيل فلوس مورد — دفع مجمّع بيتوزع على فواتيره المفتوحة) -->
+<div class="modal-overlay hidden" id="collectSupplierPaymentModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>💰 تحصيل فلوس مورد</h2>
+      <button class="modal-close" data-close="collectSupplierPaymentModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label>اختار المورد</label>
+        <select id="collectSupplierSelect"></select>
+      </div>
+      <div class="shift-summary" id="collectSupplierSummary" style="margin-top:14px;"></div>
+      <div class="form-field" style="margin-top:14px;">
+        <label>المبلغ المدفوع دلوقتي</label>
+        <input type="number" id="collectSupplierAmount" min="0" step="0.01">
+      </div>
+      <div class="empty-note hidden" id="collectSupplierEmpty">مفيش موردين عليهم فلوس دلوقتي</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="collectSupplierPaymentModal">إلغاء</button>
+      <button class="btn-primary" id="confirmCollectSupplierPaymentBtn">تأكيد الدفع</button>
     </div>
   </div>
 </div>
