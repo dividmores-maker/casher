@@ -401,6 +401,7 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
   padding:8px;
   margin:2px 0 8px;
 }
+.shift-method-panel.hidden{display:none;}
 .shift-method-order-row{
   display:flex;
   justify-content:space-between;
@@ -882,6 +883,7 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 .cart-item-info{flex:1;min-width:0;}
 .cart-item-name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);}
 .cart-item-meta{font-size:11px;color:var(--text-dim);margin-top:2px;}
+.cart-item-cost{font-size:11px;color:var(--amber);margin-top:2px;}
 .cart-item-qty{
   display:flex;
   align-items:center;
@@ -937,6 +939,8 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
   padding-top:12px;
 }
 .total-row .mono{color:var(--cyan);}
+.profit-row{color:var(--amber);}
+.profit-row .mono{color:var(--amber);}
 
 .ticket-actions{padding:14px 18px 18px;}
 .btn-checkout{width:100%;padding:14px;font-size:15px;}
@@ -1187,6 +1191,23 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
 @media (max-width:560px){
   .settings-checkbox-grid{grid-template-columns:1fr;}
 }
+.group-add-row{display:flex;gap:8px;}
+.group-add-row input{flex:1;}
+.group-add-row .btn-primary{white-space:nowrap;}
+.groups-chip-list{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+.group-chip{
+  display:flex;align-items:center;gap:8px;padding:6px 8px 6px 14px;
+  border-radius:999px;background:rgba(255,255,255,0.04);
+  border:1px solid var(--line);font-size:13px;
+}
+.group-chip .gc-remove{
+  display:flex;align-items:center;justify-content:center;
+  width:20px;height:20px;border-radius:50%;border:none;
+  background:rgba(255,255,255,0.08);color:var(--text-dim);
+  cursor:pointer;font-size:12px;line-height:1;
+}
+.group-chip .gc-remove:hover{background:var(--danger);color:#fff;}
+
 .danger-zone{
   margin-top:22px;
   padding-top:18px;

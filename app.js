@@ -6,7 +6,10 @@
    ========================================================= */
 
 const DB = {
-  KEYS: { PRODUCTS: 'pos_products', ORDERS: 'pos_orders', SETTINGS: 'pos_settings', SHIFTS: 'pos_shifts', USERS: 'pos_users', EXPENSES: 'pos_expenses', CUSTOMERS: 'pos_customers', SUPPLIERS: 'pos_suppliers', PURCHASES: 'pos_purchases', WORKERS: 'pos_workers', WORKER_TXNS: 'pos_worker_txns', WORKER_VACATIONS: 'pos_worker_vacations' },
+  KEYS: { PRODUCTS: 'pos_products', ORDERS: 'pos_orders', SETTINGS: 'pos_settings', SHIFTS: 'pos_shifts', USERS: 'pos_users', EXPENSES: 'pos_expenses', CUSTOMERS: 'pos_customers', SUPPLIERS: 'pos_suppliers', PURCHASES: 'pos_purchases', WORKERS: 'pos_workers', WORKER_TXNS: 'pos_worker_txns', WORKER_VACATIONS: 'pos_worker_vacations', GROUPS: 'pos_groups' },
+
+  getGroups(){ return JSON.parse(localStorage.getItem(this.KEYS.GROUPS) || 'null') || []; },
+  saveGroups(list){ localStorage.setItem(this.KEYS.GROUPS, JSON.stringify(list)); },
 
   getProducts(){ return JSON.parse(localStorage.getItem(this.KEYS.PRODUCTS) || '[]'); },
   saveProducts(list){ localStorage.setItem(this.KEYS.PRODUCTS, JSON.stringify(list)); },
@@ -315,12 +318,62 @@ function seedUsersIfEmpty(){
 }
 seedUsersIfEmpty();
 
-const GROUPS = [
-  { id:'men',   label:'رجالي', icon:'🧑' },
-  { id:'women', label:'حريمي', icon:'👩' },
-  { id:'kids',  label:'أطفال', icon:'🧒' },
-];
+function seedGroupsIfEmpty(){
+  if(DB.getGroups().length) return;
+  DB.saveGroups([
+    { id:'men',   label:'رجالي', icon:'🧑' },
+    { id:'women', label:'حريمي', icon:'👩' },
+    { id:'kids',  label:'أطفال', icon:'🧒' },
+  ]);
+}
+seedGroupsIfEmpty();
+let GROUPS = DB.getGroups();
+function refreshGroups(){ GROUPS = DB.getGroups(); }
 function groupInfo(id){ return GROUPS.find(g=>g.id===id); }
+
+/* إضافة/حذف قسم جديد — بيُستخدم من صفحة الإعدادات */
+function addGroup(name){
+  name = (name||'').trim();
+  if(!name) return null;
+  const exists = DB.getGroups().some(g=>g.label.trim().toLowerCase()===name.toLowerCase());
+  if(exists){ showToast('في قسم بنفس الاسم ده موجود بالفعل'); return null; }
+  const list = DB.getGroups();
+  const id = 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+  list.push({ id, label:name, icon:'🏷️' });
+  DB.saveGroups(list);
+  refreshGroups();
+  return id;
+}
+function deleteGroup(id){
+  const inUse = DB.getProducts().some(p=>p.group===id);
+  if(inUse){ showToast('مينفعش تمسح القسم ده لأن فيه أصناف مسجلة عليه'); return false; }
+  DB.saveGroups(DB.getGroups().filter(g=>g.id!==id));
+  refreshGroups();
+  return true;
+}
+function renderGroupsSettings(){
+  const wrap = document.getElementById('groupsChipList');
+  if(!wrap) return;
+  wrap.innerHTML = '';
+  DB.getGroups().forEach(g=>{
+    const chip = document.createElement('div');
+    chip.className = 'group-chip';
+    chip.innerHTML = `<span>${g.icon} ${escapeHtml(g.label)}</span><button type="button" class="gc-remove" title="مسح القسم">✕</button>`;
+    chip.querySelector('.gc-remove').onclick = ()=>{
+      if(!confirm(`تمسح قسم "${g.label}"؟`)) return;
+      if(deleteGroup(g.id)) renderGroupsSettings();
+    };
+    wrap.appendChild(chip);
+  });
+}
+document.getElementById('addGroupBtn')?.addEventListener('click', ()=>{
+  const input = document.getElementById('newGroupName');
+  const id = addGroup(input.value);
+  if(id){ input.value=''; renderGroupsSettings(); showToast('اتضاف القسم بنجاح'); }
+});
+document.getElementById('newGroupName')?.addEventListener('keydown', (e)=>{
+  if(e.key==='Enter'){ e.preventDefault(); document.getElementById('addGroupBtn').click(); }
+});
 
 /* ---------- Global state ---------- */
 let state = {
@@ -539,13 +592,16 @@ document.getElementById('openShiftBtn').addEventListener('click', ()=>{
 document.getElementById('confirmOpenShiftBtn').addEventListener('click', ()=>{
   const openingCash = Math.max(0, Number(document.getElementById('openingCashInput').value)||0);
   const shifts = DB.getShifts();
+  const opener = AUTH.currentUser();
   shifts.push({
     id: uid('sh'),
     openedAt: new Date().toISOString(),
     closedAt: null,
     openingCash,
     closingCash: null,
-    status: 'open'
+    status: 'open',
+    openedById: opener?.id || null,
+    openedByName: opener?.name || ''
   });
   DB.saveShifts(shifts);
   closeModal('openShiftModal');
@@ -605,6 +661,7 @@ function openEndShiftModal(){
   const cardOrders = ordersForShiftMethod(active, 'card');
   const creditOrders = ordersForShiftMethod(active, 'credit');
   document.getElementById('endShiftSummary').innerHTML = `
+    <div class="sum-row"><span>الوردية دي فتحها</span><span class="mono">${escapeHtml(active.openedByName || '—')}</span></div>
     <div class="sum-row"><span>بدأت الساعة</span><span class="mono">${fmtDT(active.openedAt)}</span></div>
     <div class="sum-row"><span>رأس المال (بدأت بيه الوردية)</span><span class="mono">${money(active.openingCash)}</span></div>
     <div class="sum-row"><span>المدة</span><span class="mono">${fmtDuration(active.openedAt)}</span></div>
@@ -669,9 +726,12 @@ document.getElementById('confirmEndShiftBtn').addEventListener('click', ()=>{
   if(!active) return;
   const shifts = DB.getShifts();
   const idx = shifts.findIndex(s=>s.id===active.id);
+  const closer = AUTH.currentUser();
   shifts[idx].status = 'closed';
   shifts[idx].closedAt = new Date().toISOString();
   shifts[idx].closingCash = Number(document.getElementById('closingCashInput').value)||0;
+  shifts[idx].closedById = closer?.id || null;
+  shifts[idx].closedByName = closer?.name || '';
   DB.saveShifts(shifts);
   closeModal('endShiftModal');
   showToast('تم إنهاء الوردية');
@@ -702,6 +762,8 @@ function renderShiftLog(){
           ${statusBadge}
         </div>
         <div class="shift-log-grid">
+          <div><span>فتحها</span><strong>${escapeHtml(s.openedByName || '—')}</strong></div>
+          ${s.status==='closed' ? `<div><span>قفلها</span><strong>${escapeHtml(s.closedByName || '—')}</strong></div>` : ''}
           <div><span>المدة</span><strong>${fmtDuration(s.openedAt, s.closedAt)}</strong></div>
           <div><span>الفواتير</span><strong>${stats.ordersCount}</strong></div>
           <div><span>المبيعات</span><strong>${money(stats.salesTotal)}</strong></div>
@@ -1144,6 +1206,8 @@ function cartCount(){
 
 function renderCart(){
   const wrap = document.getElementById('cartItems');
+  const isAdminUser = AUTH.isAdmin();
+  const allProducts = isAdminUser ? DB.getProducts() : [];
 
   if(!state.cart.length){
     // إعادة بناء رسالة "لسه مفيش أصناف" كل مرة بدل ما نعتمد على عنصر
@@ -1161,10 +1225,17 @@ function renderCart(){
     state.cart.forEach(item=>{
       const row = document.createElement('div');
       row.className = 'cart-item';
+      let costLine = '';
+      if(isAdminUser){
+        const product = allProducts.find(p=>p.id===item.productId);
+        const unitCost = product ? (product.cost||0) : 0;
+        costLine = `<div class="cart-item-cost">تكلفة الشراء: ${money(unitCost)} × ${item.qty} = ${money(unitCost*item.qty)}</div>`;
+      }
       row.innerHTML = `
         <div class="cart-item-info">
           <div class="cart-item-name">${escapeHtml(item.name)}</div>
           <div class="cart-item-meta">مقاس ${escapeHtml(item.size)} · ${escapeHtml(item.color)}</div>
+          ${costLine}
         </div>
         <div class="cart-item-qty">
           <button class="qty-btn" data-act="dec">−</button>
@@ -1187,6 +1258,24 @@ function renderCart(){
   document.getElementById('sumCount').textContent = cartCount();
   document.getElementById('sumSubtotal').textContent = money(subtotal);
   document.getElementById('sumTotal').textContent = money(total);
+
+  const profitRow = document.getElementById('sumProfitRow');
+  if(profitRow){
+    if(isAdminUser && state.cart.length){
+      const cartCost = state.cart.reduce((s,item)=>{
+        const product = allProducts.find(p=>p.id===item.productId);
+        return s + (product ? (product.cost||0)*item.qty : 0);
+      }, 0);
+      const profit = total - cartCost;
+      document.getElementById('sumCost').textContent = money(cartCost);
+      document.getElementById('sumProfit').textContent = money(profit);
+      profitRow.style.display = '';
+      document.getElementById('sumCostRow').style.display = '';
+    } else {
+      profitRow.style.display = 'none';
+      document.getElementById('sumCostRow').style.display = 'none';
+    }
+  }
 
   renderTicketCustomerRow(total);
 
@@ -3826,20 +3915,31 @@ function renderRestockResult(productId, highlightVariantId){
 /* ---- Product modal (add / edit) ---- */
 document.getElementById('addProductBtn').addEventListener('click', ()=>openProductModal(null));
 
-document.querySelectorAll('#groupSelect .group-btn').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    state.editGroup = btn.dataset.group;
-    document.querySelectorAll('#groupSelect .group-btn').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
+function renderProductGroupSelect(){
+  const wrap = document.getElementById('groupSelect');
+  wrap.innerHTML = '';
+  refreshGroups();
+  GROUPS.forEach(g=>{
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'group-btn';
+    btn.dataset.group = g.id;
+    btn.textContent = `${g.icon} ${g.label}`;
+    btn.classList.toggle('active', g.id===state.editGroup);
+    btn.addEventListener('click', ()=>{
+      state.editGroup = g.id;
+      wrap.querySelectorAll('.group-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+    wrap.appendChild(btn);
   });
-});
+}
 
 function openProductModal(product){
   document.getElementById('productModalTitle').textContent = product ? 'تعديل الصنف' : 'إضافة صنف جديد';
   document.getElementById('editProductId').value = product ? product.id : '';
   state.editGroup = product?.group || null;
-  document.querySelectorAll('#groupSelect .group-btn').forEach(b=>
-    b.classList.toggle('active', b.dataset.group===state.editGroup));
+  renderProductGroupSelect();
   document.getElementById('fName').value = product?.name || '';
   document.getElementById('fBrand').value = product?.brand || '';
   document.getElementById('fCategory').value = product?.category || '';
@@ -4565,6 +4665,7 @@ function loadSettingsForm(){
   document.getElementById('invShowThankYou').checked = s.invoiceFields.thankYou !== false;
   document.getElementById('setThankYouMessage').value = s.thankYouMessage || '';
   updateDesktopNotifsStatus();
+  renderGroupsSettings();
 }
 
 function updateDesktopNotifsStatus(){

@@ -78,7 +78,7 @@
       <button class="nav-item" data-view="credit">
         <span class="nav-icon">🗓️</span><span>البيع الآجل</span>
       </button>
-      <button class="nav-item" data-view="purchases">
+      <button class="nav-item" data-view="purchases" data-admin-only="true">
         <span class="nav-icon">🚚</span><span>المشتروات</span>
       </button>
       <button class="nav-item" data-view="expenses">
@@ -192,6 +192,14 @@
               <div class="sum-row total-row">
                 <span>الإجمالي</span>
                 <span class="mono" id="sumTotal">0.00</span>
+              </div>
+              <div class="sum-row profit-row" id="sumCostRow" style="display:none">
+                <span>تكلفة الشراء</span>
+                <span class="mono" id="sumCost">0.00</span>
+              </div>
+              <div class="sum-row profit-row" id="sumProfitRow" style="display:none">
+                <span>الربح المتوقع</span>
+                <span class="mono" id="sumProfit">0.00</span>
               </div>
             </div>
             <div class="ticket-actions">
@@ -656,6 +664,16 @@
           </div>
         </div>
 
+        <div class="invoice-settings-section">
+          <h3 class="invoice-settings-title">🗂️ أقسام المخزون والمبيعات</h3>
+          <p class="settings-hint">الأقسام دي هي اللي بتظهر في المخزون وفي شاشة البيع (زي رجالي / حريمي / أطفال). تقدر تضيف قسم جديد بالاسم اللي انت عايزه.</p>
+          <div class="group-add-row">
+            <input type="text" id="newGroupName" placeholder="اسم القسم الجديد">
+            <button class="btn-primary" id="addGroupBtn" type="button">+ إضافة قسم</button>
+          </div>
+          <div class="groups-chip-list" id="groupsChipList"></div>
+        </div>
+
         <div class="danger-zone">
           <h3>منطقة الخطر</h3>
           <p>البيانات محفوظة محليًا على المتصفح ده بس. لو مسحت بيانات المتصفح هتضيع.</p>
@@ -698,11 +716,7 @@
       <input type="hidden" id="editProductId">
       <div class="form-field" style="margin-bottom:14px;">
         <label>القسم</label>
-        <div class="group-select" id="groupSelect">
-          <button type="button" class="group-btn" data-group="men">🧑 رجالي</button>
-          <button type="button" class="group-btn" data-group="women">👩 حريمي</button>
-          <button type="button" class="group-btn" data-group="kids">🧒 أطفال</button>
-        </div>
+        <div class="group-select" id="groupSelect"></div>
       </div>
       <div class="form-row">
         <div class="form-field">
