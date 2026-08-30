@@ -145,7 +145,11 @@
             <div class="pane-header-row">
               <div class="search-box">
                 <span class="search-icon">🔍</span>
-                <input type="text" id="productSearch" placeholder="ابحث بالاسم أو الكود...">
+                <input type="text" id="productSearch" placeholder="ابحث بالاسم...">
+              </div>
+              <div class="search-mode-group" id="searchModeGroup">
+                <button type="button" class="search-mode-btn active" id="searchModeName" data-mode="name">بالاسم</button>
+                <button type="button" class="search-mode-btn" id="searchModeCode" data-mode="code">بالكود</button>
               </div>
               <button class="btn-scan" id="barcodeBtn">
                 <span class="btn-scan-icon">📷</span><span>إدراج باركود</span>
@@ -302,6 +306,8 @@
           <button class="btn-ghost" id="manageSuppliersBtn">🚚 الموردين</button>
           <button class="btn-ghost" id="supplierLedgerBtn">📋 سجل الموردين</button>
           <button class="btn-ghost" id="collectSupplierPaymentBtn">💰 تحصيل فلوس مورد</button>
+          <button class="btn-ghost" id="supplierAccountPayBtn">💸 سداد</button>
+          <button class="btn-ghost" id="supplierAccountCollectBtn">💰 تحصيل</button>
           <button class="btn-primary" id="addPurchaseBtn">+ عملية شراء جديدة</button>
         </div>
       </div>
@@ -566,6 +572,23 @@
         <div class="report-panel">
           <h3>🚚 أكتر مورد اتعملت معاه</h3>
           <div class="shift-summary" id="topSupplierSummary"></div>
+        </div>
+      </div>
+
+      <div class="report-panel">
+        <h3>💳 المورد — حساب سداد وتحصيل مستقل (مش مصروف)</h3>
+        <div class="inventory-table-wrap">
+          <table class="inventory-table">
+            <thead>
+              <tr>
+                <th>المورد</th>
+                <th>إجمالي السداد</th>
+                <th>إجمالي التحصيل</th>
+                <th>الصافي</th>
+              </tr>
+            </thead>
+            <tbody id="supplierAccountReportBody"></tbody>
+          </table>
         </div>
       </div>
 
@@ -1295,6 +1318,36 @@
     <div class="modal-foot">
       <button class="btn-ghost" data-close="supplierModal">إلغاء</button>
       <button class="btn-primary" id="saveSupplierBtn">حفظ المورد</button>
+    </div>
+  </div>
+</div>
+
+<!-- Supplier Account Transaction Modal (سداد / تحصيل — حساب مستقل عن فواتير الشراء والمصروفات) -->
+<div class="modal-overlay hidden" id="supplierAccountTxnModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="supplierAccountTxnTitle">💸 سداد للمورد</h2>
+      <button class="modal-close" data-close="supplierAccountTxnModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="contact-search-summary hidden" id="supplierAccountTxnEmpty">مفيش موردين مسجلين — ضيف مورد الأول من زرار «🚚 الموردين».</div>
+      <div class="form-field" id="supplierAccountTxnSelectField" style="margin-bottom:14px;">
+        <label>المورد</label>
+        <select id="supplierAccountTxnSelect"></select>
+      </div>
+      <div class="shift-summary" id="supplierAccountTxnSummary"></div>
+      <div class="form-field" id="supplierAccountTxnAmountField" style="margin-top:14px;margin-bottom:14px;">
+        <label id="supplierAccountTxnAmountLabel">المبلغ المدفوع للمورد</label>
+        <input type="number" id="supplierAccountTxnAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-field" id="supplierAccountTxnNoteField">
+        <label>ملاحظة (اختياري)</label>
+        <input type="text" id="supplierAccountTxnNote" placeholder="أي تفاصيل إضافية">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="supplierAccountTxnModal">إلغاء</button>
+      <button class="btn-primary" id="confirmSupplierAccountTxnBtn">تأكيد السداد</button>
     </div>
   </div>
 </div>

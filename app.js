@@ -6,7 +6,7 @@
    ========================================================= */
 
 const DB = {
-  KEYS: { PRODUCTS: 'pos_products', ORDERS: 'pos_orders', SETTINGS: 'pos_settings', SHIFTS: 'pos_shifts', USERS: 'pos_users', EXPENSES: 'pos_expenses', CUSTOMERS: 'pos_customers', SUPPLIERS: 'pos_suppliers', PURCHASES: 'pos_purchases', WORKERS: 'pos_workers', WORKER_TXNS: 'pos_worker_txns', WORKER_VACATIONS: 'pos_worker_vacations', GROUPS: 'pos_groups' },
+  KEYS: { PRODUCTS: 'pos_products', ORDERS: 'pos_orders', SETTINGS: 'pos_settings', SHIFTS: 'pos_shifts', USERS: 'pos_users', EXPENSES: 'pos_expenses', CUSTOMERS: 'pos_customers', SUPPLIERS: 'pos_suppliers', PURCHASES: 'pos_purchases', WORKERS: 'pos_workers', WORKER_TXNS: 'pos_worker_txns', WORKER_VACATIONS: 'pos_worker_vacations', GROUPS: 'pos_groups', SUPPLIER_ACCOUNT_TXNS: 'pos_supplier_account_txns' },
 
   getGroups(){ return JSON.parse(localStorage.getItem(this.KEYS.GROUPS) || 'null') || []; },
   saveGroups(list){ localStorage.setItem(this.KEYS.GROUPS, JSON.stringify(list)); },
@@ -34,6 +34,12 @@ const DB = {
 
   getPurchases(){ return JSON.parse(localStorage.getItem(this.KEYS.PURCHASES) || '[]'); },
   savePurchases(list){ localStorage.setItem(this.KEYS.PURCHASES, JSON.stringify(list)); },
+
+  /* Independent supplier cash account (سداد / تحصيل) — totally separate
+     from purchase invoices/debt and from the expenses log. Just a running
+     ledger of money paid to a supplier vs. money collected back from them. */
+  getSupplierAccountTxns(){ return JSON.parse(localStorage.getItem(this.KEYS.SUPPLIER_ACCOUNT_TXNS) || '[]'); },
+  saveSupplierAccountTxns(list){ localStorage.setItem(this.KEYS.SUPPLIER_ACCOUNT_TXNS, JSON.stringify(list)); },
 
   getWorkers(){ return JSON.parse(localStorage.getItem(this.KEYS.WORKERS) || '[]'); },
   saveWorkers(list){ localStorage.setItem(this.KEYS.WORKERS, JSON.stringify(list)); },
@@ -384,6 +390,7 @@ let state = {
   selectedProductId: null,
   selectedColor: null,
   searchTerm: '',
+  searchMode: 'name',
   reportRange: 'today',
   reportRangeFrom: null,
   reportRangeTo: null,
@@ -935,6 +942,7 @@ function renderGroupProductCards(){
       <div class="pc-icon">👟</div>
       <div class="pc-name">${escapeHtml(p.name)}</div>
       <div class="pc-brand">${escapeHtml(p.brand||'')}</div>
+      ${p.sku ? `<div class="pc-sku mono">كود: ${escapeHtml(p.sku)}</div>` : ''}
       <div class="pc-foot">
         <span class="pc-price mono">${money(p.price)}</span>
         <span class="pc-stock ${stockClass}">${stockLabel}</span>
@@ -1004,9 +1012,13 @@ function renderSearchResults(term){
   grid.className = 'product-grid';
   grid.innerHTML = '';
   const t = term.toLowerCase();
-  const products = DB.getProducts().filter(p=>
-    p.name.toLowerCase().includes(t) || (p.sku||'').toLowerCase().includes(t)
-  );
+  const mode = state.searchMode || 'name';
+  const products = DB.getProducts().filter(p=>{
+    const nameMatch = p.name.toLowerCase().includes(t);
+    const codeMatch = (p.sku||'').toLowerCase().includes(t);
+    if(mode==='code') return codeMatch;
+    return nameMatch;
+  });
 
   if(!products.length){
     grid.innerHTML = '<div class="no-results">مفيش أصناف مطابقة لبحثك.</div>';
@@ -1025,6 +1037,7 @@ function renderSearchResults(term){
       <div class="pc-icon">👟</div>
       <div class="pc-name">${escapeHtml(p.name)}</div>
       <div class="pc-brand">${escapeHtml(p.brand||'')}</div>
+      ${p.sku ? `<div class="pc-sku mono">كود: ${escapeHtml(p.sku)}</div>` : ''}
       <div class="pc-foot">
         <span class="pc-price mono">${money(p.price)}</span>
         <span class="pc-stock ${stockClass}">${stockLabel}</span>
@@ -1042,6 +1055,16 @@ function escapeHtml(str){
 
 document.getElementById('productSearch').addEventListener('input', e=>{
   state.searchTerm = e.target.value;
+  renderSales();
+});
+
+document.getElementById('searchModeGroup').addEventListener('click', e=>{
+  const btn = e.target.closest('.search-mode-btn');
+  if(!btn) return;
+  state.searchMode = btn.dataset.mode;
+  document.querySelectorAll('#searchModeGroup .search-mode-btn').forEach(b=>b.classList.toggle('active', b===btn));
+  const input = document.getElementById('productSearch');
+  input.placeholder = state.searchMode==='code' ? 'ابحث بالكود...' : 'ابحث بالاسم...';
   renderSales();
 });
 
@@ -2348,6 +2371,28 @@ function supplierDebtRemaining(supplierId){
     .filter(p=>p.supplierId===supplierId && !purchaseIsSettled(p))
     .reduce((s,p)=>s+purchaseRemaining(p), 0);
 }
+
+/* ---- Independent supplier account (سداد / تحصيل) ----
+   Not tied to any purchase invoice, and never logged as an expense —
+   just a running balance per supplier: money we paid them minus money
+   they gave back to us. Shown as its own breakdown in Reports. */
+function supplierAccountTxnsFor(supplierId){
+  return DB.getSupplierAccountTxns().filter(t=>t.supplierId===supplierId);
+}
+function supplierAccountTotals(supplierId){
+  const txns = supplierAccountTxnsFor(supplierId);
+  const paid = txns.filter(t=>t.type==='pay').reduce((s,t)=>s+t.amount, 0);
+  const collected = txns.filter(t=>t.type==='collect').reduce((s,t)=>s+t.amount, 0);
+  return { paid, collected, net: paid - collected };
+}
+function addSupplierAccountTxn(supplierId, supplierName, type, amount, note){
+  const list = DB.getSupplierAccountTxns();
+  list.push({
+    id: uid('satxn'), supplierId, supplierName, type, amount,
+    note: note || '', date: new Date().toISOString()
+  });
+  DB.saveSupplierAccountTxns(list);
+}
 /* Builds a short human-readable summary of a purchase's line items,
    e.g. "حذاء رياضي×3، صندل حريمي×2" — used so expense-report entries
    show what was actually bought, not just the supplier name. */
@@ -2541,6 +2586,85 @@ function deleteSupplier(id){
   renderSuppliersTable();
   showToast('تم حذف المورد');
 }
+
+/* ---- Independent supplier account (سداد / تحصيل) ----
+   Two header-level buttons next to "تحصيل فلوس مورد": pick any
+   supplier, log a plain cash entry against them. Not tied to any
+   purchase invoice and never touches the expenses log — a totally
+   separate running balance, broken out per supplier in Reports. */
+let supplierAccountTxnType = 'pay';
+function populateSupplierAccountTxnSelect(){
+  const select = document.getElementById('supplierAccountTxnSelect');
+  const selectField = document.getElementById('supplierAccountTxnSelectField');
+  const amountField = document.getElementById('supplierAccountTxnAmountField');
+  const noteField = document.getElementById('supplierAccountTxnNoteField');
+  const empty = document.getElementById('supplierAccountTxnEmpty');
+  const confirmBtn = document.getElementById('confirmSupplierAccountTxnBtn');
+  const suppliers = DB.getSuppliers();
+
+  if(!suppliers.length){
+    select.innerHTML = '';
+    document.getElementById('supplierAccountTxnSummary').innerHTML = '';
+    selectField.classList.add('hidden');
+    amountField.classList.add('hidden');
+    noteField.classList.add('hidden');
+    empty.classList.remove('hidden');
+    confirmBtn.disabled = true;
+    return;
+  }
+
+  selectField.classList.remove('hidden');
+  amountField.classList.remove('hidden');
+  noteField.classList.remove('hidden');
+  empty.classList.add('hidden');
+  confirmBtn.disabled = false;
+
+  const prev = select.value;
+  select.innerHTML = suppliers.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  select.value = suppliers.some(s=>s.id===prev) ? prev : suppliers[0].id;
+  updateSupplierAccountTxnSummary(select.value);
+}
+
+function updateSupplierAccountTxnSummary(supplierId){
+  const acct = supplierAccountTotals(supplierId);
+  document.getElementById('supplierAccountTxnSummary').innerHTML = `
+    <div class="sum-row"><span>إجمالي المدفوع له</span><span class="mono">${money(acct.paid)}</span></div>
+    <div class="sum-row"><span>إجمالي المحصّل منه</span><span class="mono">${money(acct.collected)}</span></div>
+    <div class="sum-row total-row"><span>الصافي حاليًا</span><span class="mono">${money(acct.net)}</span></div>`;
+}
+
+document.getElementById('supplierAccountTxnSelect').addEventListener('change', e=>{
+  updateSupplierAccountTxnSummary(e.target.value);
+});
+
+function openSupplierAccountTxnModal(type){
+  supplierAccountTxnType = type;
+  const isPay = type === 'pay';
+  document.getElementById('supplierAccountTxnTitle').textContent = isPay ? '💸 سداد للمورد' : '💰 تحصيل من المورد';
+  document.getElementById('supplierAccountTxnAmountLabel').textContent = isPay
+    ? 'المبلغ المدفوع للمورد' : 'المبلغ المحصّل من المورد';
+  document.getElementById('confirmSupplierAccountTxnBtn').textContent = isPay ? 'تأكيد السداد' : 'تأكيد التحصيل';
+  document.getElementById('supplierAccountTxnAmount').value = '';
+  document.getElementById('supplierAccountTxnNote').value = '';
+  populateSupplierAccountTxnSelect();
+  openModal('supplierAccountTxnModal');
+}
+
+document.getElementById('supplierAccountPayBtn').addEventListener('click', ()=>openSupplierAccountTxnModal('pay'));
+document.getElementById('supplierAccountCollectBtn').addEventListener('click', ()=>openSupplierAccountTxnModal('collect'));
+
+document.getElementById('confirmSupplierAccountTxnBtn').addEventListener('click', ()=>{
+  const supplierId = document.getElementById('supplierAccountTxnSelect').value;
+  if(!supplierId) return;
+  const supplier = DB.getSuppliers().find(s=>s.id===supplierId);
+  if(!supplier) return;
+  const amount = Math.max(0, Number(document.getElementById('supplierAccountTxnAmount').value) || 0);
+  if(amount <= 0){ showToast('اكتب مبلغ أكبر من صفر'); return; }
+  const note = document.getElementById('supplierAccountTxnNote').value.trim();
+  addSupplierAccountTxn(supplier.id, supplier.name, supplierAccountTxnType, amount, note);
+  closeModal('supplierAccountTxnModal');
+  showToast(supplierAccountTxnType==='pay' ? 'تم تسجيل السداد' : 'تم تسجيل التحصيل');
+});
 
 /* ---- Supplier ledger (سجل الموردين) — pick a supplier and see every
    invoice bought from them: what was bought, how much, how much paid,
@@ -3954,17 +4078,27 @@ function openProductModal(product){
 }
 
 /* ---- SKU / barcode generate + print (product modal) ----
-   Sequential, starting at 1 — driven by a persistent counter in settings
-   (not by scanning products.sku), so old-style long/random codes already
-   saved on existing items never throw the sequence off. Advances the
-   counter as soon as a number is handed out, so it's never reused. */
+   Sequential — derived live from the highest purely-numeric code already
+   saved on a real product, so it always continues from what's actually
+   in the inventory. Old-style long/random codes are ignored when finding
+   the max, so they never throw the sequence off. Nothing is reserved or
+   advanced just by opening the form or hitting "توليد" — the number is
+   only "used up" once the product is actually saved with that code, so
+   re-opening or re-generating after an unsaved attempt hands out the
+   exact same next number, never skips ahead. */
 function generateUniqueBarcodeCode(){
-  const settings = DB.getSettings();
-  let n = Math.max(1, Number(settings.nextSkuNumber) || 1);
-  const existing = new Set(DB.getProducts().map(p=>(p.sku||'').trim()));
+  const products = DB.getProducts();
+  let maxN = 0;
+  products.forEach(p=>{
+    const s = (p.sku||'').trim();
+    if(/^\d+$/.test(s)){
+      const num = parseInt(s, 10);
+      if(num > maxN) maxN = num;
+    }
+  });
+  const existing = new Set(products.map(p=>(p.sku||'').trim()));
+  let n = maxN + 1;
   while(existing.has(String(n))) n++;
-  settings.nextSkuNumber = n + 1;
-  DB.saveSettings(settings);
   return String(n);
 }
 
@@ -4282,6 +4416,7 @@ function renderReports(){
   renderOrdersTable(ordersForTable());
   renderExpenseBreakdown();
   renderTopSupplier();
+  renderSupplierAccountReport();
   renderExpensesTable(expensesForTable());
 }
 
@@ -4395,6 +4530,39 @@ function renderTopSupplier(){
     <div class="sum-row"><span>عدد عمليات الشراء في الفترة دي</span><span class="mono">${top.count}</span></div>
     <div class="sum-row"><span>إجمالي الشراء منه في الفترة دي</span><span class="mono">${money(top.total)}</span></div>
     <div class="sum-row total-row"><span>المستحق عليه حاليًا</span><span class="mono">${money(debt)}</span></div>`;
+}
+
+/* "المورد — حساب سداد وتحصيل": a standalone per-supplier balance,
+   independent from purchase invoices and never counted in the
+   expenses total. Always shows the full running balance (not
+   limited to the selected report range), since it's a balance,
+   not a period flow. */
+function renderSupplierAccountReport(){
+  const tbody = document.getElementById('supplierAccountReportBody');
+  const txns = DB.getSupplierAccountTxns();
+  if(!txns.length){
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-note">مفيش عمليات سداد أو تحصيل مسجلة لسه</td></tr>';
+    return;
+  }
+  const bySupplier = {};
+  txns.forEach(t=>{
+    const key = t.supplierId || t.supplierName;
+    if(!bySupplier[key]) bySupplier[key] = { name: t.supplierName||'—', paid:0, collected:0 };
+    if(t.type==='pay') bySupplier[key].paid += t.amount;
+    else bySupplier[key].collected += t.amount;
+  });
+  const rows = Object.values(bySupplier).sort((a,b)=> (b.paid-b.collected) - (a.paid-a.collected));
+  tbody.innerHTML = '';
+  rows.forEach(r=>{
+    const net = r.paid - r.collected;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(r.name)}</strong></td>
+      <td class="mono">${money(r.paid)}</td>
+      <td class="mono">${money(r.collected)}</td>
+      <td class="mono">${money(net)}</td>`;
+    tbody.appendChild(tr);
+  });
 }
 
 function renderDailyChart(orders){

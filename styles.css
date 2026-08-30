@@ -824,7 +824,8 @@ body::after{ bottom:-18%; left:-10%; background:radial-gradient(circle, var(--cy
   min-height:36px;
   color:var(--text);
 }
-.pc-brand{font-size:11px;color:var(--text-dim);margin-bottom:8px;}
+.pc-brand{font-size:11px;color:var(--text-dim);margin-bottom:2px;}
+.pc-sku{font-size:10.5px;color:var(--text-dim);opacity:0.8;margin-bottom:8px;}
 .pc-foot{display:flex;align-items:center;justify-content:space-between;}
 .pc-price{font-size:14px;font-weight:800;color:var(--cyan);}
 .pc-stock{font-size:10.5px;padding:2px 7px;border-radius:6px;background:var(--pine-tint);color:var(--lime);font-weight:700;}
