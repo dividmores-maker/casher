@@ -81,6 +81,9 @@
       <button class="nav-item" data-view="purchases" data-admin-only="true">
         <span class="nav-icon">🚚</span><span>المشتروات</span>
       </button>
+      <button class="nav-item" data-view="gameya" data-admin-only="true">
+        <span class="nav-icon">🤝</span><span>الجمعية</span>
+      </button>
       <button class="nav-item" data-view="expenses">
         <span class="nav-icon">💸</span><span>المصروفات اليومية</span>
       </button>
@@ -306,8 +309,6 @@
           <button class="btn-ghost" id="manageSuppliersBtn">🚚 الموردين</button>
           <button class="btn-ghost" id="supplierLedgerBtn">📋 سجل الموردين</button>
           <button class="btn-ghost" id="collectSupplierPaymentBtn">💰 تحصيل فلوس مورد</button>
-          <button class="btn-ghost" id="supplierAccountPayBtn">💸 سداد</button>
-          <button class="btn-ghost" id="supplierAccountCollectBtn">💰 تحصيل</button>
           <button class="btn-primary" id="addPurchaseBtn">+ عملية شراء جديدة</button>
         </div>
       </div>
@@ -343,6 +344,7 @@
               <th>الهاتف</th>
               <th>البيان</th>
               <th>الإجمالي</th>
+              <th>خصم</th>
               <th>المدفوع</th>
               <th>المتبقي</th>
               <th>الحالة</th>
@@ -350,6 +352,51 @@
             </tr>
           </thead>
           <tbody id="purchasesTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- GAMEYA VIEW (الجمعية — المحل طرف واحد بيدفع قسط شهري وياخد المبلغ كله في ميعاد استحقاقه) -->
+    <section class="view hidden" id="view-gameya">
+      <div class="view-header">
+        <h1>الجمعية</h1>
+        <div class="view-header-actions">
+          <button class="btn-primary" id="addGameyaBtn">+ جمعية جديدة</button>
+        </div>
+      </div>
+
+      <div class="expense-cat-filter" id="gameyaFilter">
+        <button class="chip active" data-gfilter="active">نشطة</button>
+        <button class="chip" data-gfilter="collected">اتقفلت</button>
+        <button class="chip" data-gfilter="all">الكل</button>
+      </div>
+
+      <div class="report-stats">
+        <div class="stat-card">
+          <div class="stat-label">عدد الجمعيات النشطة</div>
+          <div class="stat-value mono" id="gameyaActiveCount">0</div>
+        </div>
+        <div class="stat-card warn">
+          <div class="stat-label">إجمالي الأقساط المدفوعة (الجمعيات النشطة)</div>
+          <div class="stat-value mono" id="gameyaPaidTotal">0</div>
+        </div>
+      </div>
+
+      <div class="inventory-table-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>اسم الجمعية</th>
+              <th>القسط الشهري</th>
+              <th>المتوقع استلامه</th>
+              <th>تاريخ الاستحقاق</th>
+              <th>إجمالي المدفوع</th>
+              <th>المتبقي</th>
+              <th>الحالة</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="gameyaTableBody"></tbody>
         </table>
       </div>
     </section>
@@ -572,23 +619,6 @@
         <div class="report-panel">
           <h3>🚚 أكتر مورد اتعملت معاه</h3>
           <div class="shift-summary" id="topSupplierSummary"></div>
-        </div>
-      </div>
-
-      <div class="report-panel">
-        <h3>💳 المورد — حساب سداد وتحصيل مستقل (مش مصروف)</h3>
-        <div class="inventory-table-wrap">
-          <table class="inventory-table">
-            <thead>
-              <tr>
-                <th>المورد</th>
-                <th>إجمالي السداد</th>
-                <th>إجمالي التحصيل</th>
-                <th>الصافي</th>
-              </tr>
-            </thead>
-            <tbody id="supplierAccountReportBody"></tbody>
-          </table>
         </div>
       </div>
 
@@ -1322,32 +1352,121 @@
   </div>
 </div>
 
-<!-- Supplier Account Transaction Modal (سداد / تحصيل — حساب مستقل عن فواتير الشراء والمصروفات) -->
-<div class="modal-overlay hidden" id="supplierAccountTxnModal">
+<!-- Gameya Setup Modal (add/edit a جمعية) -->
+<div class="modal-overlay hidden" id="gameyaSetupModal">
   <div class="modal modal-sm">
     <div class="modal-head">
-      <h2 id="supplierAccountTxnTitle">💸 سداد للمورد</h2>
-      <button class="modal-close" data-close="supplierAccountTxnModal">✕</button>
+      <h2 id="gameyaSetupTitle">🤝 جمعية جديدة</h2>
+      <button class="modal-close" data-close="gameyaSetupModal">✕</button>
     </div>
     <div class="modal-body">
-      <div class="contact-search-summary hidden" id="supplierAccountTxnEmpty">مفيش موردين مسجلين — ضيف مورد الأول من زرار «🚚 الموردين».</div>
-      <div class="form-field" id="supplierAccountTxnSelectField" style="margin-bottom:14px;">
-        <label>المورد</label>
-        <select id="supplierAccountTxnSelect"></select>
+      <input type="hidden" id="editGameyaId">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>اسم الجمعية (اختياري)</label>
+        <input type="text" id="gameyaName" placeholder="مثال: جمعية الحاجة سعاد">
       </div>
-      <div class="shift-summary" id="supplierAccountTxnSummary"></div>
-      <div class="form-field" id="supplierAccountTxnAmountField" style="margin-top:14px;margin-bottom:14px;">
-        <label id="supplierAccountTxnAmountLabel">المبلغ المدفوع للمورد</label>
-        <input type="number" id="supplierAccountTxnAmount" min="0" step="0.01" placeholder="0.00">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>القسط الشهري</label>
+        <input type="number" id="gameyaMonthlyAmount" min="0" step="0.01" placeholder="0.00">
       </div>
-      <div class="form-field" id="supplierAccountTxnNoteField">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>المبلغ الكلي المتوقع استلامه (اختياري)</label>
+        <input type="number" id="gameyaTotalExpected" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>تاريخ استحقاق الاستلام</label>
+        <input type="date" id="gameyaDueDate">
+      </div>
+      <div class="form-field">
         <label>ملاحظة (اختياري)</label>
-        <input type="text" id="supplierAccountTxnNote" placeholder="أي تفاصيل إضافية">
+        <input type="text" id="gameyaNote" placeholder="أي تفاصيل إضافية">
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn-ghost" data-close="supplierAccountTxnModal">إلغاء</button>
-      <button class="btn-primary" id="confirmSupplierAccountTxnBtn">تأكيد السداد</button>
+      <button class="btn-ghost" data-close="gameyaSetupModal">إلغاء</button>
+      <button class="btn-primary" id="confirmGameyaSetupBtn">حفظ الجمعية</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gameya Detail Modal (سجل الأقساط الشهرية + تسجيل الاستلام) -->
+<div class="modal-overlay hidden" id="gameyaDetailModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2 id="gameyaDetailTitle">🤝 تفاصيل الجمعية</h2>
+      <button class="modal-close" data-close="gameyaDetailModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="shift-summary" id="gameyaDetailSummary"></div>
+
+      <div class="view-header-actions" style="margin-top:14px;margin-bottom:6px;">
+        <button class="btn-ghost-sm" id="gameyaAddPaymentBtn">+ تسجيل دفعة شهر</button>
+        <button class="btn-primary" id="gameyaCollectBtn">✅ تسجيل استلام الفلوس</button>
+      </div>
+
+      <h3 class="customer-detail-subhead">سجل الأقساط المدفوعة</h3>
+      <div class="contact-search-summary hidden" id="gameyaDetailPaymentsEmpty">لسه مفيش أقساط مسجلة</div>
+      <div class="picker-options" id="gameyaDetailPayments"></div>
+    </div>
+    <div class="modal-foot" data-admin-only>
+      <button class="btn-ghost" id="editGameyaBtn">✏️ تعديل بيانات الجمعية</button>
+      <button class="btn-ghost" id="deleteGameyaBtn">🗑️ حذف الجمعية</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gameya Payment Modal (تسجيل قسط شهري) -->
+<div class="modal-overlay hidden" id="gameyaPaymentModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>💵 تسجيل دفعة شهر</h2>
+      <button class="modal-close" data-close="gameyaPaymentModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>المبلغ المدفوع</label>
+        <input type="number" id="gameyaPaymentAmount" min="0" step="0.01">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>التاريخ</label>
+        <input type="date" id="gameyaPaymentDate">
+      </div>
+      <div class="form-field">
+        <label>ملاحظة (اختياري)</label>
+        <input type="text" id="gameyaPaymentNote" placeholder="أي تفاصيل إضافية">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="gameyaPaymentModal">إلغاء</button>
+      <button class="btn-primary" id="confirmGameyaPaymentBtn">تسجيل الدفعة</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gameya Collect Modal (تسجيل استلام مبلغ الجمعية في ميعاد استحقاقها) -->
+<div class="modal-overlay hidden" id="gameyaCollectModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h2>✅ تسجيل استلام الفلوس</h2>
+      <button class="modal-close" data-close="gameyaCollectModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>المبلغ المستلم</label>
+        <input type="number" id="gameyaCollectAmount" min="0" step="0.01">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>التاريخ</label>
+        <input type="date" id="gameyaCollectDate">
+      </div>
+      <div class="form-field">
+        <label>ملاحظة (اختياري)</label>
+        <input type="text" id="gameyaCollectNote" placeholder="أي تفاصيل إضافية">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="gameyaCollectModal">إلغاء</button>
+      <button class="btn-primary" id="confirmGameyaCollectBtn">تأكيد الاستلام</button>
     </div>
   </div>
 </div>
@@ -1371,6 +1490,10 @@
       <div class="form-field" style="margin-bottom:14px;">
         <label>إجمالي قيمة الشراء</label>
         <input type="number" id="purchaseAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>خصم على الفاتورة (اختياري)</label>
+        <input type="number" id="purchaseDiscount" min="0" step="0.01" placeholder="0.00" value="0">
       </div>
       <div id="purchaseDownPaymentWrap">
         <div class="form-field">

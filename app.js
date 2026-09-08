@@ -6,7 +6,7 @@
    ========================================================= */
 
 const DB = {
-  KEYS: { PRODUCTS: 'pos_products', ORDERS: 'pos_orders', SETTINGS: 'pos_settings', SHIFTS: 'pos_shifts', USERS: 'pos_users', EXPENSES: 'pos_expenses', CUSTOMERS: 'pos_customers', SUPPLIERS: 'pos_suppliers', PURCHASES: 'pos_purchases', WORKERS: 'pos_workers', WORKER_TXNS: 'pos_worker_txns', WORKER_VACATIONS: 'pos_worker_vacations', GROUPS: 'pos_groups', SUPPLIER_ACCOUNT_TXNS: 'pos_supplier_account_txns' },
+  KEYS: { PRODUCTS: 'pos_products', ORDERS: 'pos_orders', SETTINGS: 'pos_settings', SHIFTS: 'pos_shifts', USERS: 'pos_users', EXPENSES: 'pos_expenses', CUSTOMERS: 'pos_customers', SUPPLIERS: 'pos_suppliers', PURCHASES: 'pos_purchases', WORKERS: 'pos_workers', WORKER_TXNS: 'pos_worker_txns', WORKER_VACATIONS: 'pos_worker_vacations', GROUPS: 'pos_groups', GAMEYAS: 'pos_gameyas', GAMEYA_PAYMENTS: 'pos_gameya_payments' },
 
   getGroups(){ return JSON.parse(localStorage.getItem(this.KEYS.GROUPS) || 'null') || []; },
   saveGroups(list){ localStorage.setItem(this.KEYS.GROUPS, JSON.stringify(list)); },
@@ -35,11 +35,13 @@ const DB = {
   getPurchases(){ return JSON.parse(localStorage.getItem(this.KEYS.PURCHASES) || '[]'); },
   savePurchases(list){ localStorage.setItem(this.KEYS.PURCHASES, JSON.stringify(list)); },
 
-  /* Independent supplier cash account (سداد / تحصيل) — totally separate
-     from purchase invoices/debt and from the expenses log. Just a running
-     ledger of money paid to a supplier vs. money collected back from them. */
-  getSupplierAccountTxns(){ return JSON.parse(localStorage.getItem(this.KEYS.SUPPLIER_ACCOUNT_TXNS) || '[]'); },
-  saveSupplierAccountTxns(list){ localStorage.setItem(this.KEYS.SUPPLIER_ACCOUNT_TXNS, JSON.stringify(list)); },
+  /* الجمعية — المحل طرف واحد بيدفع قسط شهري لجمعية خارجية وياخد المبلغ
+     كله دفعة واحدة في ميعاد استحقاقه. كل جمعية ليها إعداد (قسط شهري،
+     مبلغ متوقع، ميعاد استحقاق) وسجل أقساط مدفوعة منفصل. */
+  getGameyas(){ return JSON.parse(localStorage.getItem(this.KEYS.GAMEYAS) || '[]'); },
+  saveGameyas(list){ localStorage.setItem(this.KEYS.GAMEYAS, JSON.stringify(list)); },
+  getGameyaPayments(){ return JSON.parse(localStorage.getItem(this.KEYS.GAMEYA_PAYMENTS) || '[]'); },
+  saveGameyaPayments(list){ localStorage.setItem(this.KEYS.GAMEYA_PAYMENTS, JSON.stringify(list)); },
 
   getWorkers(){ return JSON.parse(localStorage.getItem(this.KEYS.WORKERS) || '[]'); },
   saveWorkers(list){ localStorage.setItem(this.KEYS.WORKERS, JSON.stringify(list)); },
@@ -404,6 +406,7 @@ let state = {
   customerSearchTerm: '',
   customerPickerSearchTerm: '',
   purchaseFilter: 'open',
+  gameyaFilter: 'active',
   inventorySearchTerm: '',
   creditSearchTerm: '',
   purchaseSearchTerm: '',
@@ -812,6 +815,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(view==='customers') renderCustomersView();
     if(view==='credit') renderCreditView();
     if(view==='purchases') renderPurchasesView();
+    if(view==='gameya') renderGameyaView();
     if(view==='expenses') renderDailyExpensesView();
     if(view==='workers') renderWorkersView();
     if(view==='reports') renderReports();
@@ -2360,8 +2364,11 @@ document.getElementById('confirmCreditPaymentBtn').addEventListener('click', ()=
 function purchasePaidTotal(purchase){
   return (purchase.payments||[]).reduce((s,p)=>s+p.amount, 0);
 }
+function purchaseNetAmount(purchase){
+  return Math.max(0, Math.round(((purchase.amount||0) - (purchase.discount||0))*100)/100);
+}
 function purchaseRemaining(purchase){
-  return Math.max(0, Math.round((purchase.amount - purchasePaidTotal(purchase))*100)/100);
+  return Math.max(0, Math.round((purchaseNetAmount(purchase) - purchasePaidTotal(purchase))*100)/100);
 }
 function purchaseIsSettled(purchase){
   return purchaseRemaining(purchase) <= 0.01;
@@ -2372,27 +2379,6 @@ function supplierDebtRemaining(supplierId){
     .reduce((s,p)=>s+purchaseRemaining(p), 0);
 }
 
-/* ---- Independent supplier account (سداد / تحصيل) ----
-   Not tied to any purchase invoice, and never logged as an expense —
-   just a running balance per supplier: money we paid them minus money
-   they gave back to us. Shown as its own breakdown in Reports. */
-function supplierAccountTxnsFor(supplierId){
-  return DB.getSupplierAccountTxns().filter(t=>t.supplierId===supplierId);
-}
-function supplierAccountTotals(supplierId){
-  const txns = supplierAccountTxnsFor(supplierId);
-  const paid = txns.filter(t=>t.type==='pay').reduce((s,t)=>s+t.amount, 0);
-  const collected = txns.filter(t=>t.type==='collect').reduce((s,t)=>s+t.amount, 0);
-  return { paid, collected, net: paid - collected };
-}
-function addSupplierAccountTxn(supplierId, supplierName, type, amount, note){
-  const list = DB.getSupplierAccountTxns();
-  list.push({
-    id: uid('satxn'), supplierId, supplierName, type, amount,
-    note: note || '', date: new Date().toISOString()
-  });
-  DB.saveSupplierAccountTxns(list);
-}
 /* Builds a short human-readable summary of a purchase's line items,
    e.g. "حذاء رياضي×3، صندل حريمي×2" — used so expense-report entries
    show what was actually bought, not just the supplier name. */
@@ -2466,7 +2452,7 @@ function renderPurchasesView(){
 
   const tbody = document.getElementById('purchasesTableBody');
   if(!list.length){
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-note">مفيش عمليات شراء هنا</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty-note">مفيش عمليات شراء هنا</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -2483,6 +2469,7 @@ function renderPurchasesView(){
       <td class="mono">${escapeHtml(p.supplierPhone||'—')}</td>
       <td>${escapeHtml(p.note||'—')}</td>
       <td class="mono">${money(p.amount)}</td>
+      <td class="mono">${p.discount ? money(p.discount) : '—'}</td>
       <td class="mono">${money(paid)}</td>
       <td class="mono">${money(remaining)}</td>
       <td><span class="credit-status ${settled?'settled':'open'}">${settled?'✓ اتسدد':'مستحق'}</span></td>
@@ -2512,6 +2499,248 @@ document.querySelectorAll('#purchaseFilter .chip').forEach(chip=>{
 document.getElementById('purchaseSearchInput').addEventListener('input', e=>{
   state.purchaseSearchTerm = e.target.value;
   renderPurchasesView();
+});
+
+/* ---- الجمعية (Gameya) ----
+   المحل هنا طرف واحد بس، والاستلام ممكن يحصل قبل أو بعد السداد:
+   - يقدر يدفع أقساط شهرية الأول وبعدين يستلم المبلغ كله (الطريقة التقليدية)
+   - أو يستلم المبلغ الأول (لو دوره جه بدري) وبعدين يفضل يسدد قسط كل شهر
+     لحد ما إجمالي اللي دفعه يساوي اللي استلمه (يبقى المتبقي = صفر) —
+     وقتها الجمعية تتقفل تلقائي. كل جمعية سجل مستقل وليها سجل أقساط
+     منفصل، والاستلام بيحصل مرة واحدة بس لكل جمعية. */
+let state_gameyaDetailId = null;
+
+function gameyaPaymentsFor(gameyaId){
+  return DB.getGameyaPayments().filter(p=>p.gameyaId===gameyaId);
+}
+function gameyaPaidTotal(gameyaId){
+  return gameyaPaymentsFor(gameyaId).reduce((s,p)=>s+p.amount, 0);
+}
+function gameyaHasCollected(g){ return g.collectedAmount != null; }
+// المتبقي عليك بعد الاستلام = اللي استلمته ناقص كل اللي دفعته (قبل الاستلام وبعده).
+// null لو لسه ما استلمتش، عشان معناه المفهوم ده مالوش معنى دلوقتي.
+function gameyaBalance(g){
+  if(!gameyaHasCollected(g)) return null;
+  return Math.max(0, Math.round((g.collectedAmount - gameyaPaidTotal(g.id))*100)/100);
+}
+function gameyaIsClosed(g){
+  const bal = gameyaBalance(g);
+  return bal !== null && bal <= 0.01;
+}
+
+function renderGameyaView(){
+  const all = DB.getGameyas();
+  const active = all.filter(g=>!gameyaIsClosed(g));
+
+  document.getElementById('gameyaActiveCount').textContent = active.length;
+  document.getElementById('gameyaPaidTotal').textContent =
+    money(active.reduce((s,g)=>s+gameyaPaidTotal(g.id), 0));
+
+  let list;
+  if(state.gameyaFilter==='active') list = active;
+  else if(state.gameyaFilter==='collected') list = all.filter(gameyaIsClosed);
+  else list = all;
+
+  const tbody = document.getElementById('gameyaTableBody');
+  if(!list.length){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-note">مفيش جمعيات مسجلة لسه</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  [...list].reverse().forEach(g=>{
+    const paid = gameyaPaidTotal(g.id);
+    const closed = gameyaIsClosed(g);
+    const hasCollected = gameyaHasCollected(g);
+    const balance = gameyaBalance(g);
+    const dueDt = g.dueDate ? new Date(g.dueDate).toLocaleDateString('ar-EG') : '—';
+    const statusLabel = closed ? '✓ اتقفلت' : (hasCollected ? 'بيتسدد' : 'نشطة');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(g.name || 'جمعية')}</strong></td>
+      <td class="mono">${money(g.monthlyAmount)}</td>
+      <td class="mono">${g.totalExpected ? money(g.totalExpected) : '—'}</td>
+      <td class="mono">${dueDt}</td>
+      <td class="mono">${money(paid)}</td>
+      <td class="mono">${balance!==null ? money(balance) : '—'}</td>
+      <td><span class="credit-status ${closed?'settled':'open'}">${statusLabel}</span></td>
+      <td><button class="icon-btn" data-action="view" title="فتح">👁️</button></td>`;
+    tr.querySelector('[data-action="view"]').onclick = ()=>openGameyaDetailModal(g.id);
+    tbody.appendChild(tr);
+  });
+}
+
+document.querySelectorAll('#gameyaFilter .chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>{
+    document.querySelectorAll('#gameyaFilter .chip').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    state.gameyaFilter = chip.dataset.gfilter;
+    renderGameyaView();
+  });
+});
+
+function openGameyaSetupModal(gameya){
+  document.getElementById('editGameyaId').value = gameya ? gameya.id : '';
+  document.getElementById('gameyaSetupTitle').textContent = gameya ? '✏️ تعديل بيانات الجمعية' : '🤝 جمعية جديدة';
+  document.getElementById('gameyaName').value = gameya ? (gameya.name||'') : '';
+  document.getElementById('gameyaMonthlyAmount').value = gameya ? gameya.monthlyAmount : '';
+  document.getElementById('gameyaTotalExpected').value = gameya && gameya.totalExpected ? gameya.totalExpected : '';
+  document.getElementById('gameyaDueDate').value = gameya && gameya.dueDate ? gameya.dueDate.slice(0,10) : '';
+  document.getElementById('gameyaNote').value = gameya ? (gameya.note||'') : '';
+  document.getElementById('confirmGameyaSetupBtn').textContent = gameya ? 'حفظ التعديل' : 'حفظ الجمعية';
+  openModal('gameyaSetupModal');
+}
+
+document.getElementById('addGameyaBtn').addEventListener('click', ()=>openGameyaSetupModal(null));
+
+document.getElementById('confirmGameyaSetupBtn').addEventListener('click', ()=>{
+  const monthlyAmount = Math.max(0, Number(document.getElementById('gameyaMonthlyAmount').value) || 0);
+  if(monthlyAmount <= 0){ showToast('اكتب قيمة القسط الشهري'); return; }
+  const editId = document.getElementById('editGameyaId').value;
+  const name = document.getElementById('gameyaName').value.trim();
+  const totalExpected = Math.max(0, Number(document.getElementById('gameyaTotalExpected').value) || 0);
+  const dueDate = document.getElementById('gameyaDueDate').value;
+  const note = document.getElementById('gameyaNote').value.trim();
+
+  const list = DB.getGameyas();
+  if(editId){
+    const g = list.find(x=>x.id===editId);
+    if(g){
+      g.name = name; g.monthlyAmount = monthlyAmount; g.totalExpected = totalExpected || null;
+      g.dueDate = dueDate || null; g.note = note;
+    }
+  } else {
+    list.push({
+      id: uid('gam'), name, monthlyAmount, totalExpected: totalExpected || null,
+      dueDate: dueDate || null, note,
+      collectedAmount: null, collectedDate: null, collectedNote: '',
+      createdAt: new Date().toISOString()
+    });
+  }
+  DB.saveGameyas(list);
+  closeModal('gameyaSetupModal');
+  renderGameyaView();
+  if(editId && state_gameyaDetailId===editId) renderGameyaDetail(editId);
+  showToast(editId ? 'تم حفظ التعديل' : 'تم إضافة الجمعية');
+});
+
+function renderGameyaDetail(gameyaId){
+  const g = DB.getGameyas().find(x=>x.id===gameyaId);
+  if(!g) return;
+  const paid = gameyaPaidTotal(g.id);
+  const hasCollected = gameyaHasCollected(g);
+  const balance = gameyaBalance(g);
+  const closed = gameyaIsClosed(g);
+  const dueDt = g.dueDate ? new Date(g.dueDate).toLocaleDateString('ar-EG') : '—';
+
+  document.getElementById('gameyaDetailTitle').textContent = '🤝 ' + (g.name || 'جمعية');
+  document.getElementById('gameyaDetailSummary').innerHTML = `
+    <div class="sum-row"><span>القسط الشهري</span><span class="mono">${money(g.monthlyAmount)}</span></div>
+    <div class="sum-row"><span>المتوقع استلامه</span><span class="mono">${g.totalExpected ? money(g.totalExpected) : '—'}</span></div>
+    <div class="sum-row"><span>تاريخ الاستحقاق</span><span class="mono">${dueDt}</span></div>
+    <div class="sum-row"><span>إجمالي المدفوع لحد دلوقتي</span><span class="mono">${money(paid)}</span></div>
+    ${hasCollected ? `<div class="sum-row"><span>اتسلمت بتاريخ</span><span class="mono">${new Date(g.collectedDate).toLocaleDateString('ar-EG')} — ${money(g.collectedAmount)}</span></div>` : ''}
+    ${hasCollected && !closed ? `<div class="sum-row total-row"><span>المتبقي عليك (لسه هتسدده)</span><span class="mono">${money(balance)}</span></div>` : ''}
+    ${closed ? `<div class="sum-row total-row"><span>✓ الجمعية اتقفلت بالكامل</span><span></span></div>` : ''}`;
+
+  document.getElementById('gameyaAddPaymentBtn').classList.toggle('hidden', closed);
+  document.getElementById('gameyaCollectBtn').classList.toggle('hidden', hasCollected);
+
+  const payments = gameyaPaymentsFor(g.id).slice().reverse();
+  const wrap = document.getElementById('gameyaDetailPayments');
+  const empty = document.getElementById('gameyaDetailPaymentsEmpty');
+  if(!payments.length){
+    wrap.innerHTML = '';
+    empty.classList.remove('hidden');
+  } else {
+    empty.classList.add('hidden');
+    wrap.innerHTML = '';
+    payments.forEach(p=>{
+      const row = document.createElement('div');
+      row.className = 'contact-chip';
+      row.innerHTML = `<span>💵 ${money(p.amount)} ج.م${p.note ? ' — '+escapeHtml(p.note) : ''}</span><span class="mono">${new Date(p.date).toLocaleDateString('ar-EG')}</span>`;
+      wrap.appendChild(row);
+    });
+  }
+}
+
+function openGameyaDetailModal(gameyaId){
+  state_gameyaDetailId = gameyaId;
+  renderGameyaDetail(gameyaId);
+  openModal('gameyaDetailModal');
+}
+
+document.getElementById('editGameyaBtn').addEventListener('click', ()=>{
+  const g = DB.getGameyas().find(x=>x.id===state_gameyaDetailId);
+  if(!g) return;
+  openGameyaSetupModal(g);
+});
+
+document.getElementById('deleteGameyaBtn').addEventListener('click', ()=>{
+  if(!state_gameyaDetailId) return;
+  if(!confirm('متأكد إنك عايز تحذف الجمعية دي وكل سجل أقساطها؟')) return;
+  DB.saveGameyas(DB.getGameyas().filter(g=>g.id!==state_gameyaDetailId));
+  DB.saveGameyaPayments(DB.getGameyaPayments().filter(p=>p.gameyaId!==state_gameyaDetailId));
+  closeModal('gameyaDetailModal');
+  state_gameyaDetailId = null;
+  renderGameyaView();
+  showToast('تم حذف الجمعية');
+});
+
+document.getElementById('gameyaAddPaymentBtn').addEventListener('click', ()=>{
+  const g = DB.getGameyas().find(x=>x.id===state_gameyaDetailId);
+  if(!g) return;
+  if(gameyaIsClosed(g)){ showToast('الجمعية دي اتقفلت خلاص'); return; }
+  const balance = gameyaBalance(g);
+  // لو مستلم فعلاً ولسه فيه متبقي، اقترح قيمة القسط الشهري ما تتعداش المتبقي
+  const suggested = balance !== null ? Math.min(g.monthlyAmount || balance, balance) : g.monthlyAmount;
+  document.getElementById('gameyaPaymentAmount').value = suggested || g.monthlyAmount || '';
+  document.getElementById('gameyaPaymentDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('gameyaPaymentNote').value = '';
+  openModal('gameyaPaymentModal');
+});
+
+document.getElementById('confirmGameyaPaymentBtn').addEventListener('click', ()=>{
+  const g = DB.getGameyas().find(x=>x.id===state_gameyaDetailId);
+  if(!g) return;
+  const amount = Math.max(0, Number(document.getElementById('gameyaPaymentAmount').value) || 0);
+  if(amount <= 0){ showToast('اكتب مبلغ أكبر من صفر'); return; }
+  const date = document.getElementById('gameyaPaymentDate').value || new Date().toISOString().slice(0,10);
+  const note = document.getElementById('gameyaPaymentNote').value.trim();
+  const list = DB.getGameyaPayments();
+  list.push({ id: uid('gampay'), gameyaId: state_gameyaDetailId, amount, date, note });
+  DB.saveGameyaPayments(list);
+  closeModal('gameyaPaymentModal');
+  renderGameyaDetail(state_gameyaDetailId);
+  renderGameyaView();
+  showToast(gameyaIsClosed(g) ? 'تم تسجيل الدفعة — الجمعية اتقفلت بالكامل 🎉' : 'تم تسجيل الدفعة');
+});
+
+document.getElementById('gameyaCollectBtn').addEventListener('click', ()=>{
+  const g = DB.getGameyas().find(x=>x.id===state_gameyaDetailId);
+  if(!g) return;
+  if(gameyaHasCollected(g)){ showToast('الاستلام اتسجل قبل كده لنفس الجمعية'); return; }
+  document.getElementById('gameyaCollectAmount').value = g.totalExpected || '';
+  document.getElementById('gameyaCollectDate').value = g.dueDate ? g.dueDate.slice(0,10) : new Date().toISOString().slice(0,10);
+  document.getElementById('gameyaCollectNote').value = '';
+  openModal('gameyaCollectModal');
+});
+
+document.getElementById('confirmGameyaCollectBtn').addEventListener('click', ()=>{
+  const amount = Math.max(0, Number(document.getElementById('gameyaCollectAmount').value) || 0);
+  if(amount <= 0){ showToast('اكتب المبلغ اللي اتسلم'); return; }
+  const date = document.getElementById('gameyaCollectDate').value || new Date().toISOString().slice(0,10);
+  const note = document.getElementById('gameyaCollectNote').value.trim();
+  const list = DB.getGameyas();
+  const g = list.find(x=>x.id===state_gameyaDetailId);
+  if(!g) return;
+  g.collectedAmount = amount;
+  g.collectedDate = date;
+  g.collectedNote = note;
+  DB.saveGameyas(list);
+  closeModal('gameyaCollectModal');
+  renderGameyaDetail(state_gameyaDetailId);
+  renderGameyaView();
+  showToast(gameyaIsClosed(g) ? 'تم تسجيل استلام الفلوس — الجمعية اتقفلت بالكامل 🎉' : 'تم تسجيل استلام الفلوس');
 });
 
 /* ---- Suppliers management ---- */
@@ -2586,85 +2815,6 @@ function deleteSupplier(id){
   renderSuppliersTable();
   showToast('تم حذف المورد');
 }
-
-/* ---- Independent supplier account (سداد / تحصيل) ----
-   Two header-level buttons next to "تحصيل فلوس مورد": pick any
-   supplier, log a plain cash entry against them. Not tied to any
-   purchase invoice and never touches the expenses log — a totally
-   separate running balance, broken out per supplier in Reports. */
-let supplierAccountTxnType = 'pay';
-function populateSupplierAccountTxnSelect(){
-  const select = document.getElementById('supplierAccountTxnSelect');
-  const selectField = document.getElementById('supplierAccountTxnSelectField');
-  const amountField = document.getElementById('supplierAccountTxnAmountField');
-  const noteField = document.getElementById('supplierAccountTxnNoteField');
-  const empty = document.getElementById('supplierAccountTxnEmpty');
-  const confirmBtn = document.getElementById('confirmSupplierAccountTxnBtn');
-  const suppliers = DB.getSuppliers();
-
-  if(!suppliers.length){
-    select.innerHTML = '';
-    document.getElementById('supplierAccountTxnSummary').innerHTML = '';
-    selectField.classList.add('hidden');
-    amountField.classList.add('hidden');
-    noteField.classList.add('hidden');
-    empty.classList.remove('hidden');
-    confirmBtn.disabled = true;
-    return;
-  }
-
-  selectField.classList.remove('hidden');
-  amountField.classList.remove('hidden');
-  noteField.classList.remove('hidden');
-  empty.classList.add('hidden');
-  confirmBtn.disabled = false;
-
-  const prev = select.value;
-  select.innerHTML = suppliers.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
-  select.value = suppliers.some(s=>s.id===prev) ? prev : suppliers[0].id;
-  updateSupplierAccountTxnSummary(select.value);
-}
-
-function updateSupplierAccountTxnSummary(supplierId){
-  const acct = supplierAccountTotals(supplierId);
-  document.getElementById('supplierAccountTxnSummary').innerHTML = `
-    <div class="sum-row"><span>إجمالي المدفوع له</span><span class="mono">${money(acct.paid)}</span></div>
-    <div class="sum-row"><span>إجمالي المحصّل منه</span><span class="mono">${money(acct.collected)}</span></div>
-    <div class="sum-row total-row"><span>الصافي حاليًا</span><span class="mono">${money(acct.net)}</span></div>`;
-}
-
-document.getElementById('supplierAccountTxnSelect').addEventListener('change', e=>{
-  updateSupplierAccountTxnSummary(e.target.value);
-});
-
-function openSupplierAccountTxnModal(type){
-  supplierAccountTxnType = type;
-  const isPay = type === 'pay';
-  document.getElementById('supplierAccountTxnTitle').textContent = isPay ? '💸 سداد للمورد' : '💰 تحصيل من المورد';
-  document.getElementById('supplierAccountTxnAmountLabel').textContent = isPay
-    ? 'المبلغ المدفوع للمورد' : 'المبلغ المحصّل من المورد';
-  document.getElementById('confirmSupplierAccountTxnBtn').textContent = isPay ? 'تأكيد السداد' : 'تأكيد التحصيل';
-  document.getElementById('supplierAccountTxnAmount').value = '';
-  document.getElementById('supplierAccountTxnNote').value = '';
-  populateSupplierAccountTxnSelect();
-  openModal('supplierAccountTxnModal');
-}
-
-document.getElementById('supplierAccountPayBtn').addEventListener('click', ()=>openSupplierAccountTxnModal('pay'));
-document.getElementById('supplierAccountCollectBtn').addEventListener('click', ()=>openSupplierAccountTxnModal('collect'));
-
-document.getElementById('confirmSupplierAccountTxnBtn').addEventListener('click', ()=>{
-  const supplierId = document.getElementById('supplierAccountTxnSelect').value;
-  if(!supplierId) return;
-  const supplier = DB.getSuppliers().find(s=>s.id===supplierId);
-  if(!supplier) return;
-  const amount = Math.max(0, Number(document.getElementById('supplierAccountTxnAmount').value) || 0);
-  if(amount <= 0){ showToast('اكتب مبلغ أكبر من صفر'); return; }
-  const note = document.getElementById('supplierAccountTxnNote').value.trim();
-  addSupplierAccountTxn(supplier.id, supplier.name, supplierAccountTxnType, amount, note);
-  closeModal('supplierAccountTxnModal');
-  showToast(supplierAccountTxnType==='pay' ? 'تم تسجيل السداد' : 'تم تسجيل التحصيل');
-});
 
 /* ---- Supplier ledger (سجل الموردين) — pick a supplier and see every
    invoice bought from them: what was bought, how much, how much paid,
@@ -2853,12 +3003,16 @@ function populatePurchaseSupplierSelect(){
 
 function updatePurchasePreview(){
   const amount = Math.max(0, Number(document.getElementById('purchaseAmount').value) || 0);
+  const discount = Math.min(amount, Math.max(0, Number(document.getElementById('purchaseDiscount').value) || 0));
   const down = Math.max(0, Number(document.getElementById('purchaseDownPayment').value) || 0);
-  const remaining = Math.max(0, amount - down);
+  const net = Math.max(0, amount - discount);
+  const remaining = Math.max(0, net - down);
   document.getElementById('purchaseRemainingPreview').innerHTML =
+    (discount>0 ? `الإجمالي بعد الخصم: <strong>${money(net)}</strong> ج.م — ` : '') +
     `المتبقي المستحق للمورد: <strong>${money(remaining)}</strong> ج.م`;
 }
 document.getElementById('purchaseAmount').addEventListener('input', updatePurchasePreview);
+document.getElementById('purchaseDiscount').addEventListener('input', updatePurchasePreview);
 document.getElementById('purchaseDownPayment').addEventListener('input', updatePurchasePreview);
 
 document.getElementById('addPurchaseBtn').addEventListener('click', ()=>{
@@ -2871,6 +3025,7 @@ document.getElementById('addPurchaseBtn').addEventListener('click', ()=>{
   populatePurchaseSupplierSelect();
   document.getElementById('purchaseNote').value = '';
   document.getElementById('purchaseAmount').value = '';
+  document.getElementById('purchaseDiscount').value = 0;
   document.getElementById('purchaseDownPayment').value = 0;
   state.editPurchaseItems = [];
   renderPurchaseItemRows();
@@ -2879,8 +3034,8 @@ document.getElementById('addPurchaseBtn').addEventListener('click', ()=>{
 });
 
 /* Admin-only: edit an existing purchase invoice (supplier, note, amount,
-   line items). Payments already recorded are left untouched — use the
-   "تسجيل دفعة" flow for those. */
+   line items, discount). Payments already recorded are left untouched —
+   use the "تسجيل دفعة" flow for those. */
 function openEditPurchaseModal(purchase){
   state.editingPurchaseId = purchase.id;
   document.querySelector('#purchaseModal .modal-head h2').textContent = '✏️ تعديل عملية الشراء';
@@ -2890,6 +3045,7 @@ function openEditPurchaseModal(purchase){
   document.getElementById('purchaseSupplierSelect').disabled = false;
   document.getElementById('purchaseNote').value = purchase.note || '';
   document.getElementById('purchaseAmount').value = purchase.amount;
+  document.getElementById('purchaseDiscount').value = purchase.discount || 0;
   document.getElementById('purchaseDownPayment').value = 0;
   // Editing changes the invoice itself, not the money already paid toward
   // it — hide the down-payment field so it can't be confused with that.
@@ -2965,6 +3121,7 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
   if(!supplier){ showToast('اختار مورد'); return; }
   const amount = Math.max(0, Number(document.getElementById('purchaseAmount').value) || 0);
   if(amount <= 0){ showToast('اكتب إجمالي قيمة الشراء'); return; }
+  const discount = Math.min(amount, Math.max(0, Number(document.getElementById('purchaseDiscount').value) || 0));
   const note = document.getElementById('purchaseNote').value.trim();
 
   const items = state.editPurchaseItems
@@ -2978,10 +3135,11 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
     if(idx===-1){ showToast('عملية الشراء دي مش موجودة'); closeModal('purchaseModal'); return; }
     const existing = list[idx];
     const paid = purchasePaidTotal(existing);
-    if(amount < paid - 0.01){
-      if(!confirm(`المبلغ المدفوع فعلاً (${money(paid)}) أكبر من الإجمالي الجديد. تكمل التعديل؟`)) return;
+    const net = Math.max(0, amount - discount);
+    if(net < paid - 0.01){
+      if(!confirm(`المبلغ المدفوع فعلاً (${money(paid)}) أكبر من الإجمالي بعد الخصم. تكمل التعديل؟`)) return;
     }
-    list[idx] = { ...existing, supplierId: supplier.id, supplierName: supplier.name, supplierPhone: supplier.phone || '', amount, note, items };
+    list[idx] = { ...existing, supplierId: supplier.id, supplierName: supplier.name, supplierPhone: supplier.phone || '', amount, discount, note, items };
     DB.savePurchases(list);
     state.editingPurchaseId = null;
     closeModal('purchaseModal');
@@ -2991,7 +3149,8 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
     return;
   }
 
-  const down = Math.min(amount, Math.max(0, Number(document.getElementById('purchaseDownPayment').value) || 0));
+  const net = Math.max(0, amount - discount);
+  const down = Math.min(net, Math.max(0, Number(document.getElementById('purchaseDownPayment').value) || 0));
   const cashier = AUTH.currentUser();
   const activeShift = getActiveShift();
   const purchase = {
@@ -3000,7 +3159,7 @@ document.getElementById('confirmPurchaseBtn').addEventListener('click', ()=>{
     supplierId: supplier.id,
     supplierName: supplier.name,
     supplierPhone: supplier.phone || '',
-    amount, note, items,
+    amount, discount, note, items,
     payments: [],
     createdBy: cashier?.id || null,
     createdByName: cashier?.name || ''
@@ -3034,6 +3193,8 @@ function openPurchasePaymentModal(purchaseId){
   document.getElementById('purchasePaymentSummary').innerHTML = `
     <div class="sum-row"><span>المورد</span><span class="mono">${escapeHtml(purchase.supplierName||'—')}</span></div>
     <div class="sum-row"><span>إجمالي عملية الشراء</span><span class="mono">${money(purchase.amount)}</span></div>
+    ${purchase.discount ? `<div class="sum-row"><span>الخصم</span><span class="mono">-${money(purchase.discount)}</span></div>
+    <div class="sum-row"><span>الإجمالي بعد الخصم</span><span class="mono">${money(purchaseNetAmount(purchase))}</span></div>` : ''}
     <div class="sum-row"><span>المدفوع لحد دلوقتي</span><span class="mono">${money(paid)}</span></div>
     <div class="sum-row total-row"><span>المتبقي</span><span class="mono">${money(remaining)}</span></div>`;
   document.getElementById('purchasePaymentAmount').value = remaining.toFixed(2);
@@ -3080,6 +3241,8 @@ function openPurchaseDetailModal(purchaseId){
     <div class="sum-row"><span>التاريخ</span><span class="mono">${new Date(purchase.date).toLocaleDateString('ar-EG')}</span></div>
     <div class="sum-row"><span>البيان</span><span>${escapeHtml(purchase.note||'—')}</span></div>
     <div class="sum-row"><span>إجمالي عملية الشراء</span><span class="mono">${money(purchase.amount)}</span></div>
+    ${purchase.discount ? `<div class="sum-row"><span>الخصم</span><span class="mono">-${money(purchase.discount)}</span></div>
+    <div class="sum-row"><span>الإجمالي بعد الخصم</span><span class="mono">${money(purchaseNetAmount(purchase))}</span></div>` : ''}
     <div class="sum-row"><span>المدفوع</span><span class="mono">${money(paid)}</span></div>
     <div class="sum-row total-row"><span>المتبقي</span><span class="mono">${money(remaining)}</span></div>`;
 
@@ -4416,7 +4579,6 @@ function renderReports(){
   renderOrdersTable(ordersForTable());
   renderExpenseBreakdown();
   renderTopSupplier();
-  renderSupplierAccountReport();
   renderExpensesTable(expensesForTable());
 }
 
@@ -4530,39 +4692,6 @@ function renderTopSupplier(){
     <div class="sum-row"><span>عدد عمليات الشراء في الفترة دي</span><span class="mono">${top.count}</span></div>
     <div class="sum-row"><span>إجمالي الشراء منه في الفترة دي</span><span class="mono">${money(top.total)}</span></div>
     <div class="sum-row total-row"><span>المستحق عليه حاليًا</span><span class="mono">${money(debt)}</span></div>`;
-}
-
-/* "المورد — حساب سداد وتحصيل": a standalone per-supplier balance,
-   independent from purchase invoices and never counted in the
-   expenses total. Always shows the full running balance (not
-   limited to the selected report range), since it's a balance,
-   not a period flow. */
-function renderSupplierAccountReport(){
-  const tbody = document.getElementById('supplierAccountReportBody');
-  const txns = DB.getSupplierAccountTxns();
-  if(!txns.length){
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-note">مفيش عمليات سداد أو تحصيل مسجلة لسه</td></tr>';
-    return;
-  }
-  const bySupplier = {};
-  txns.forEach(t=>{
-    const key = t.supplierId || t.supplierName;
-    if(!bySupplier[key]) bySupplier[key] = { name: t.supplierName||'—', paid:0, collected:0 };
-    if(t.type==='pay') bySupplier[key].paid += t.amount;
-    else bySupplier[key].collected += t.amount;
-  });
-  const rows = Object.values(bySupplier).sort((a,b)=> (b.paid-b.collected) - (a.paid-a.collected));
-  tbody.innerHTML = '';
-  rows.forEach(r=>{
-    const net = r.paid - r.collected;
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><strong>${escapeHtml(r.name)}</strong></td>
-      <td class="mono">${money(r.paid)}</td>
-      <td class="mono">${money(r.collected)}</td>
-      <td class="mono">${money(net)}</td>`;
-    tbody.appendChild(tr);
-  });
 }
 
 function renderDailyChart(orders){
