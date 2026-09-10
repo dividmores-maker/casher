@@ -1208,6 +1208,18 @@ function removeCartItem(variantId){
   renderCart();
 }
 
+/* Manual price override on a cart line — يسمح تغيير سعر الصنف في الفاتورة
+   الحالية بس (مش بيغيّر سعر المنتج الأصلي في المخزون/المنتجات). */
+function editCartItemPrice(variantId){
+  const item = state.cart.find(c=>c.variantId===variantId);
+  if(!item) return;
+  const input = prompt(`سعر الوحدة لـ "${item.name}" (مقاس ${item.size} · ${item.color}):`, item.price);
+  if(input===null) return;
+  const newPrice = Math.max(0, Number(input) || 0);
+  item.price = newPrice;
+  renderCart();
+}
+
 // Wipes the current invoice (cart, company/متعامل, contact/العميل, points redemption, discount)
 // so a fresh sale can start from a totally blank slate.
 function resetSaleCart(){
@@ -1269,10 +1281,11 @@ function renderCart(){
           <span class="qty-val mono">${item.qty}</span>
           <button class="qty-btn" data-act="inc">+</button>
         </div>
-        <div class="cart-item-price mono">${money(item.price*item.qty)}</div>
+        <div class="cart-item-price mono" data-action="edit-price" title="اضغط لتعديل السعر">${money(item.price*item.qty)} <span class="cart-item-price-pencil">✏️</span></div>
         <button class="cart-item-remove" title="حذف">✕</button>`;
       row.querySelector('[data-act="inc"]').onclick = ()=>changeCartQty(item.variantId, 1);
       row.querySelector('[data-act="dec"]').onclick = ()=>changeCartQty(item.variantId, -1);
+      row.querySelector('[data-action="edit-price"]').onclick = ()=>editCartItemPrice(item.variantId);
       row.querySelector('.cart-item-remove').onclick = ()=>removeCartItem(item.variantId);
       wrap.appendChild(row);
     });
@@ -1879,7 +1892,37 @@ function showReceipt(order){
     html += `<div class="receipt-sub" style="margin-top:10px;">${escapeHtml(msg)}</div>`;
   }
   document.getElementById('receiptContent').innerHTML = html;
+  renderReceiptAdminCost(order);
   openModal('receiptModal');
+}
+
+/* تكلفة الجملة وربح الفاتورة — للأدمن بس، وبتتعرض تحت الفاتورة في
+   الشاشة (لما تفتحها من التقرير أو فور البيع) بس مش بتتطبع خالص، عشان
+   العميل ميشوفش سعر الجملة في الفاتورة الورقية. */
+function renderReceiptAdminCost(order){
+  const box = document.getElementById('receiptAdminCost');
+  if(!AUTH.isAdmin()){
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  const products = DB.getProducts();
+  const itemsHtml = order.items.map(it=>{
+    const returned = it.returnedQty || 0;
+    const remaining = it.qty - returned;
+    if(remaining <= 0) return '';
+    const product = products.find(p=>p.id===it.productId);
+    const unitCost = product ? (product.cost||0) : 0;
+    return `<div class="sum-row"><span>${escapeHtml(it.name)} (${escapeHtml(it.size)}/${escapeHtml(it.color)}) x${remaining}</span><span class="mono">${money(unitCost*remaining)}</span></div>`;
+  }).join('');
+  const totalCost = order.cost || 0;
+  const profit = order.total - totalCost;
+  box.innerHTML = `
+    <div class="receipt-admin-cost-title">💰 تكلفة الجملة (أدمن بس — مش بتتطبع)</div>
+    ${itemsHtml}
+    <div class="sum-row total-row"><span>إجمالي تكلفة الجملة</span><span class="mono">${money(totalCost)}</span></div>
+    <div class="sum-row total-row"><span>ربح الفاتورة</span><span class="mono">${money(profit)}</span></div>`;
+  box.classList.remove('hidden');
 }
 document.getElementById('printReceiptBtn').addEventListener('click', ()=>window.print());
 
@@ -2429,6 +2472,30 @@ function logWorkerExpense(amount, workerName, label, note){
   DB.saveExpenses(expenses);
 }
 
+/* الجمعية: مدفوعاتها بتتسجل كصف في نفس سجل "المصروفات" عشان تبقى
+   ظاهرة في "تفاصيل المصروفات" و"المصروفات اليومية" للمتابعة، لكن
+   بـ shiftId فاضي (null) عمدًا — عشان أبدًا ميتخصمش من كاش الدرج،
+   وبستبعادها بالاسم (category==='gameya') من كل مجاميع/إحصائيات
+   المصروفات وصافي الربح في renderDailyExpensesView/renderReports/
+   renderExpenseBreakdown. يعني: تظهر كصف للمعلومية بس، من غير ما
+   تتحسب في أي إجمالي. */
+function logGameyaExpense(amount, gameyaName, note){
+  if(amount <= 0) return;
+  const cashier = AUTH.currentUser();
+  const expenses = DB.getExpenses();
+  expenses.push({
+    id: uid('exp'),
+    date: new Date().toISOString(),
+    category: 'gameya',
+    amount,
+    note: `${gameyaName || 'جمعية'}${note ? ' — '+note : ''}`,
+    shiftId: null,
+    createdBy: cashier?.id || null,
+    createdByName: cashier?.name || ''
+  });
+  DB.saveExpenses(expenses);
+}
+
 function purchases(){ return DB.getPurchases(); }
 
 function renderPurchasesView(){
@@ -2706,9 +2773,14 @@ document.getElementById('confirmGameyaPaymentBtn').addEventListener('click', ()=
   if(amount <= 0){ showToast('اكتب مبلغ أكبر من صفر'); return; }
   const date = document.getElementById('gameyaPaymentDate').value || new Date().toISOString().slice(0,10);
   const note = document.getElementById('gameyaPaymentNote').value.trim();
+  const cashier = AUTH.currentUser();
   const list = DB.getGameyaPayments();
-  list.push({ id: uid('gampay'), gameyaId: state_gameyaDetailId, amount, date, note });
+  list.push({
+    id: uid('gampay'), gameyaId: state_gameyaDetailId, amount, date, note,
+    byId: cashier?.id || null, byName: cashier?.name || ''
+  });
   DB.saveGameyaPayments(list);
+  logGameyaExpense(amount, g.name, note || 'دفعة شهر');
   closeModal('gameyaPaymentModal');
   renderGameyaDetail(state_gameyaDetailId);
   renderGameyaView();
@@ -2733,9 +2805,12 @@ document.getElementById('confirmGameyaCollectBtn').addEventListener('click', ()=
   const list = DB.getGameyas();
   const g = list.find(x=>x.id===state_gameyaDetailId);
   if(!g) return;
+  const cashier = AUTH.currentUser();
   g.collectedAmount = amount;
   g.collectedDate = date;
   g.collectedNote = note;
+  g.collectedBy = cashier?.id || null;
+  g.collectedByName = cashier?.name || '';
   DB.saveGameyas(list);
   closeModal('gameyaCollectModal');
   renderGameyaDetail(state_gameyaDetailId);
@@ -3797,8 +3872,10 @@ function renderDailyExpensesView(){
     });
   }
 
-  document.getElementById('expenseTotalStat').textContent = money(expenses.reduce((s,e)=>s+e.amount,0));
-  document.getElementById('expenseCountStat').textContent = expenses.length;
+  // جمعية بتظهر كصف هنا للمتابعة بس مش بتتحسب في إجمالي/عدد المصروفات.
+  const statExpenses = expenses.filter(e=>e.category!=='gameya');
+  document.getElementById('expenseTotalStat').textContent = money(statExpenses.reduce((s,e)=>s+e.amount,0));
+  document.getElementById('expenseCountStat').textContent = statExpenses.length;
 
   if(!expenses.length){
     tbody.innerHTML = '<tr><td colspan="7" class="empty-note">مفيش مصروفات في الفترة دي</td></tr>';
@@ -4563,12 +4640,23 @@ function renderReports(){
   const revenue = orders.reduce((s,o)=>s+o.total,0);
   const units = orders.reduce((s,o)=>s+o.items.reduce((a,i)=>a+i.qty,0),0);
   const cost = orders.reduce((s,o)=>s+(o.cost||0),0);
-  const expensesTotal = expensesForReportRange().reduce((s,e)=>s+e.amount,0);
-  const profit = revenue - cost - expensesTotal;
+  const rangeExpenses = expensesForReportRange();
+  // جمعية بتظهر كصفوف في "تفاصيل المصروفات" للمتابعة بس، لكن مش بتتحسب
+  // في إجمالي المصروفات ولا في صافي الربح خالص — هي فلوس شخصية مش
+  // مصروف حقيقي على المحل.
+  const realExpenses = rangeExpenses.filter(e=>e.category!=='gameya');
+  const expensesTotal = realExpenses.reduce((s,e)=>s+e.amount,0);
+  // فلوس المورد (تكلفة شراء البضاعة) مش بتتخصم تاني من صافي الربح هنا —
+  // هي أصلاً متحسوبة جوه "cost" (تكلفة كل قطعة بيعت)، فخصمها تاني من
+  // المصروفات كان بيبوظ الرقم. بس هي لسه ظاهرة عادي في "المصروفات"
+  // وفي الخزنة، بس مش بتأثر على صافي الربح.
+  const profitExpenses = realExpenses.filter(e=>e.category!=='suppliers').reduce((s,e)=>s+e.amount,0);
+  const profit = revenue - cost - profitExpenses;
 
   document.getElementById('repRevenue').textContent = money(revenue);
   document.getElementById('repOrders').textContent = orders.length;
   document.getElementById('repUnits').textContent = units;
+  document.getElementById('repWholesaleTotal').textContent = money(cost);
   document.getElementById('repExpenses').textContent = money(expensesTotal);
   document.getElementById('repProfit').textContent = money(profit);
   document.getElementById('repProfitCard').classList.toggle('warn', profit < 0);
@@ -4602,7 +4690,7 @@ document.getElementById('orderNumberSearch').addEventListener('input', ()=>{
 });
 
 const EXPENSE_CATEGORY_LABELS = {
-  suppliers: '🚚 موردين', workers: '👷 عمال', rent: '🏠 إيجار', bills: '💡 فواتير',
+  suppliers: '🚚 موردين', workers: '👷 عمال', gameya: '🤝 جمعية', rent: '🏠 إيجار', bills: '💡 فواتير',
   maintenance: '🔧 صيانة', marketing: '📣 تسويق', other: '📦 أخرى'
 };
 
@@ -4646,7 +4734,9 @@ function renderExpensesTable(expenses){
    the selected report range, highest first, so it's clear at a
    glance where the money went (rent vs suppliers vs workers etc). */
 function renderExpenseBreakdown(){
-  const expenses = expensesForReportRange();
+  // جمعية مستبعدة من هنا زي ما هي مستبعدة من إجمالي المصروفات وصافي
+  // الربح — بس لسه ظاهرة كصفوف عادية في جدول "تفاصيل المصروفات" تحت.
+  const expenses = expensesForReportRange().filter(e=>e.category!=='gameya');
   const totals = {};
   expenses.forEach(e=>{ totals[e.category] = (totals[e.category]||0) + e.amount; });
   const list = document.getElementById('expenseBreakdownList');
